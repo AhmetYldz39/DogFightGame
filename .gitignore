@@ -1,0 +1,54 @@
+# --- Python genel ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+
+# --- Virtual environment ---
+venv/
+ENV/
+.env/
+.venv/
+
+# --- Jupyter / IPython ---
+.ipynb_checkpoints/
+*.ipynb
+
+# --- OS / IDE ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# --- Logs ---
+*.log
+logs/
+runs/          # SB3 tensorboard/log klasörü
+wandb/         # Weights & Biases logları
+
+# --- Checkpoints / Modeller ---
+*.zip          # SB3 model.save() çıktıları
+*.pkl          # VecNormalize gibi pickle dosyaları
+*.onnx
+*.h5
+
+# --- Data ---
+*.npy
+*.npz
+*.csv
+*.txt
+
+# --- Unity / Diğer ---
+Library/
+Temp/
+Obj/
+Build/
+Builds/
+Logs/
+MemoryCaptures/
