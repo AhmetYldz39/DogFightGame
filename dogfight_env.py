@@ -1,6 +1,7 @@
 # dogfight_env.py
 from collections import deque
 import numpy as np
+import gymnasium as gym
 
 
 class Dogfight1v1:
@@ -14,8 +15,10 @@ class Dogfight1v1:
         self.vmin, self.vmax = 60.0, 240.0
         self.turn_k = 0.6     # bank->turn kazancı
         self.thr_k = 20.0    # throttle ivme kazancı
-        self.wez_R = 600.0
-        self.wez_ang = np.deg2rad(20.0)
+        self.wez_R = 800.0
+        self.wez_ang = np.deg2rad(25.0)
+        self.base_pk = 0.65
+        self.bullet_speed = 300.0
 
         # bank ve throttle komutları kaç frame gecikmeli uygulansın?
         self.delay_bank_steps = 2  # 0 -> gecikme yok
@@ -34,6 +37,19 @@ class Dogfight1v1:
 
         # çok küçük süreç gürültüsü / rüzgâr
         self.wind_vel_std = 0.5  # m/s ~ her adımda rastgele sürüklenme
+
+        # --- gözlem boyutu ayarı ---
+        # Eğer boost sistemi yoksa 10, varsa 11 elemanlı.
+        obs_dim = 10
+        if hasattr(self, "boost_energy_max"):
+            obs_dim += 1
+
+        self.observation_space = gym.spaces.Box(
+            low=-1.0,
+            high=1.0,
+            shape=(obs_dim,),
+            dtype=np.float32
+        )
 
         self.reset()
 
@@ -77,9 +93,10 @@ class Dogfight1v1:
         obs = self._obs_all()
         return obs
 
-    def step(self, actions):  # actions: {0:(bank_cmd,thr_cmd,fire), 1:(...)}
+    def step(self, actions):  # actions: {0:(bank_rate,thr_cmd,trigger_p), 1:(...)}
         self.steps += 1
         r = np.zeros(2, dtype=np.float32)
+        r += -1e-4  # küçük zaman cezası
         done = False
         info = {}
 
@@ -91,31 +108,56 @@ class Dogfight1v1:
         delayed_actions = {}
         for i in (0, 1):
             # deque[-1] en yeni, deque[0] en eski
-            bank_cmd, thr_cmd, fire_cmd = self.cmd_buf[i][-1]  # varsayılan
+            a_latest = np.asarray(self.cmd_buf[i][-1], dtype=float).ravel()
+            # güvenli: yoksa n=3'e doldur
+            if a_latest.size < 3:
+                pad = np.zeros(3 - a_latest.size, dtype=float)
+                a_latest = np.concatenate([a_latest, pad])
+
+            bank_rate, thr_cmd, trig = a_latest  # defaults (gecikmesiz)
             if getattr(self, "delay_bank_steps", 0) > 0:
-                bank_cmd = self.cmd_buf[i][-(self.delay_bank_steps + 1)][0]
+                a = np.asarray(self.cmd_buf[i][-(self.delay_bank_steps + 1)], dtype=float).ravel()
+                if a.size >= 1:
+                    bank_rate = float(a[0])
             if getattr(self, "delay_thr_steps", 0) > 0:
-                thr_cmd = self.cmd_buf[i][-(self.delay_thr_steps + 1)][1]
+                a = np.asarray(self.cmd_buf[i][-(self.delay_thr_steps + 1)], dtype=float).ravel()
+                if a.size >= 2:
+                    thr_cmd = float(a[1])
             if getattr(self, "delay_fire_steps", 0) > 0:
-                fire_cmd = self.cmd_buf[i][-(self.delay_fire_steps + 1)][2]
-            delayed_actions[i] = (int(bank_cmd), int(thr_cmd), int(fire_cmd))
+                a = np.asarray(self.cmd_buf[i][-(self.delay_fire_steps + 1)], dtype=float).ravel()
+                if a.size >= 3:
+                    trig = float(a[2])
 
-        # ---- 3) Durum güncelle (bank/throttle) ----
+            # clip güvenliği
+            bank_rate = float(np.clip(bank_rate, -1.0, 1.0))
+            thr_cmd = float(np.clip(thr_cmd, 0.0, 1.0))
+            trig = float(np.clip(trig, 0.0, 1.0))
+
+            delayed_actions[i] = (bank_rate, thr_cmd, trig)
+
+        # ---- 3) Durum güncelle (bank/throttle continuous) ----
+        bank_rate_max = getattr(self, "bank_rate_max", np.deg2rad(20.0))  # rad/s
         for i in (0, 1):
-            bank_cmd, thr_cmd, _ = delayed_actions[i]
+            bank_rate, thr_cmd, _ = delayed_actions[i]
 
-            # bank update (−1,0,+1)*BDEL)
+            # bank açısı (rad) – sürekli hızla değişim
+            prev_bank = self.s[i, 4]
             self.s[i, 4] = np.clip(
-                self.s[i, 4] + (bank_cmd - 1) * self.BDEL,
+                prev_bank + (bank_rate * bank_rate_max) * self.dt,
                 -np.deg2rad(60), np.deg2rad(60)
             )
             # heading
             self.s[i, 3] = (self.s[i, 3] + self.turn_k * self.s[i, 4] * self.dt + np.pi) % (2 * np.pi) - np.pi
-            # speed
-            v = self.s[i, 2]
-            v_target = self.vmax if thr_cmd == 2 else (self.vmin if thr_cmd == 0 else v)
-            v = v + self.thr_k * (v_target - v) / self.vmax * self.dt
+            # hız: hedef hız vmin..vmax arasında linear interpolation
+            v_target = self.vmin + thr_cmd * (self.vmax - self.vmin)
+            v = self.s[i, 2] + self.thr_k * (v_target - self.s[i, 2]) / self.vmax * self.dt
             self.s[i, 2] = np.clip(v, self.vmin, self.vmax)
+
+            # komut yumuşaklığı (bank değişimine küçük ceza)
+            if not hasattr(self, "_prev_bank"):
+                self._prev_bank = np.zeros(2, dtype=np.float32)
+            r[i] += -0.0005 * abs(self.s[i, 4] - self._prev_bank[i])
+            self._prev_bank[i] = self.s[i, 4]
 
         # ---- 4) Konum + süreç gürültüsü (küçük rüzgâr) ----
         for i in (0, 1):
@@ -147,18 +189,45 @@ class Dogfight1v1:
             j = 1 - i
             R, brg, aoff, clos = rel(i, j)
 
+            # --- Lead-angle (ön nişan) hesabı ---
+            dx, dy = self.s[j, 0] - self.s[i, 0], self.s[j, 1] - self.s[i, 1]
+            psi_i = self.s[i, 3]
+            psi_j = self.s[j, 3]
+            v_i, v_j = self.s[i, 2], self.s[j, 2]
+
+            # Hedefin yönündeki hız bileşenleri
+            vjx = v_j * np.cos(psi_j)
+            vjy = v_j * np.sin(psi_j)
+
+            # Hedefe ulaşma süresi yaklaşık R / bullet_speed
+            t_hit = R / (self.bullet_speed + 1e-6)
+
+            # Hedefin o sürede ilerleyeceği yer
+            lead_x = dx + vjx * t_hit
+            lead_y = dy + vjy * t_hit
+
+            # Ajanın yönüne göre “lead bearing” açısı
+            lead_bearing = (np.arctan2(lead_y, lead_x) - psi_i + np.pi) % (2 * np.pi) - np.pi
+
+            # Hata: hedefin gelecekteki yönüyle ajanın nişan yönü arasındaki fark
+            lead_err = abs(lead_bearing)
+
             inside_wez = (R < self.wez_R) and (abs(brg) < self.wez_ang)
-            # Shaping (güçlendirilmiş)
+            # Shaping
             r[i] += 0.004 * inside_wez
             r[i] += -0.0010 * abs(aoff)
-            r[i] += -0.0002 * R
+            r[i] += -0.0001 * R
 
-            # Gecikmiş fire komutu
-            if delayed_actions[i][2] == 1 and self.ammo[i] > 0:
+            # Continuous tetik: olasılık > 0.5 ise ateş say
+            _, _, trig = delayed_actions[i]
+            fire = (trig > 0.5)
+
+            if fire and self.ammo[i] > 0:
                 self.ammo[i] -= 1
                 if inside_wez:
-                    # Biraz cömert pk (curriculum aşaması); kademeli normale döndürülebilir
-                    pk = max(0.2, 0.7 - 0.02 * R / 100 - 0.4 * abs(aoff) / np.deg2rad(60))
+                    r[i] += 0.002  # gate/WEZ içi mikro bonus
+                    pk = self.base_pk * np.exp(- (lead_err / np.deg2rad(20)) ** 2)
+                    pk = float(np.clip(pk, 0.05, 0.85))
                     if self.rng.random() < pk:
                         r[i] += 0.2
                         r[j] -= 0.2
@@ -169,8 +238,8 @@ class Dogfight1v1:
                             done = True
                             info["winner"] = i
                 else:
-                    # israf cezası (curriculum’da yumuşak; sonra artır)
-                    r[i] -= 0.005
+                    # WEZ dışı akılsız ateşe sert ceza
+                    r[i] -= 0.01
 
         # ---- 8) Episode bitişi / gözlem / info ----
         obs = self._obs_all()
@@ -182,14 +251,14 @@ class Dogfight1v1:
         return obs, r, done, info
 
     def _obs(self, i):
-        """Ajan i için GÜRÜLTÜLÜ (ölçüm) gözlem vektörü döndürür."""
+        """Ajan i için GÜRÜLTÜLÜ (ölçüm) gözlem vektörü döndürür (sin/cos açı kodlamasıyla)."""
         j = 1 - i
 
         # --- gerçek (gürültüsüz) relatifler ---
         dx, dy = self.s[j, 0] - self.s[i, 0], self.s[j, 1] - self.s[i, 1]
         R = np.hypot(dx, dy)
-        brg = (np.arctan2(dy, dx) - self.s[i, 3] + np.pi) % (2 * np.pi) - np.pi
-        aoff = (self.s[i, 3] - self.s[j, 3] + np.pi) % (2 * np.pi) - np.pi
+        brg = (np.arctan2(dy, dx) - self.s[i, 3] + np.pi) % (2*np.pi) - np.pi
+        aoff = (self.s[i, 3] - self.s[j, 3] + np.pi) % (2*np.pi) - np.pi
         vij = self.s[j, 2] * np.array([np.cos(self.s[j, 3]), np.sin(self.s[j, 3])])
         vii = self.s[i, 2] * np.array([np.cos(self.s[i, 3]), np.sin(self.s[i, 3])])
         relv = vij - vii
@@ -203,17 +272,28 @@ class Dogfight1v1:
         v_n = self.s[i, 2] + self.rng.normal(0.0, getattr(self, "noise_speed_std", 0.0))
         bank_n = self.s[i, 4] + self.rng.normal(0.0, getattr(self, "noise_bank_std", 0.0))
 
+        # --- açıları sin/cos ile kodla ---
+        brg_s, brg_c = np.sin(brg_n),  np.cos(brg_n)
+        aoff_s, aoff_c = np.sin(aoff_n), np.cos(aoff_n)
+        bank_s, bank_c = np.sin(bank_n), np.cos(bank_n)
+
         # --- normalize et ---
-        # NOT: ammo normalizasyonu için 120 kullandım; başlangıç cephanen farklıysa bu sabiti değiştir.
-        o = np.array([
-            np.clip(R_n / 2000.0, 0.0, 1.0),
-            (((brg_n + np.pi) % (2 * np.pi)) - np.pi) / np.pi,
-            (((aoff_n + np.pi) % (2 * np.pi)) - np.pi) / np.pi,
-            np.tanh(clos_n / 200.0),
-            (v_n - self.vmin) / (self.vmax - self.vmin),
-            bank_n / np.deg2rad(60),
-            min(1.0, self.ammo[i] / 120.0),  # <-- ammo cap 120 ise 1.0'a kadar çıkar
-        ], dtype=np.float32)
+        ammo_cap = 120.0  # başlangıç cephanen farklıysa bunu değiştir
+        o_list = [
+            np.clip(R_n / 2000.0, 0.0, 1.0),      # mesafe [0,1] (~0..2000 m)
+            brg_s, brg_c,                          # bearing sin/cos
+            aoff_s, aoff_c,                        # angle-off sin/cos
+            np.tanh(clos_n / 200.0),               # closure ~[-1,1]
+            (v_n - self.vmin) / (self.vmax - self.vmin),  # hız [0,1]
+            bank_s, bank_c,                        # bank sin/cos
+            min(1.0, self.ammo[i] / ammo_cap),     # ammo [0,1]
+        ]
+
+        # boost enerjisi varsa ekle (opsiyonel)
+        if hasattr(self, "boost_energy") and hasattr(self, "boost_energy_max"):
+            o_list.append(float(self.boost_energy[i] / (self.boost_energy_max + 1e-6)))
+
+        o = np.array(o_list, dtype=np.float32)
 
         return np.clip(o, -1.0, 1.0)
 

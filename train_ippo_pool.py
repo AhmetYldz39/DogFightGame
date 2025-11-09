@@ -25,24 +25,25 @@ from dogfight_env import Dogfight1v1   # ← senin güncel env'in
 # ----------------------------------------------------
 # 1) Heuristic bot (değişmedi)
 # ----------------------------------------------------
-def heuristic_policy(obs_vec):
-    brg = np.pi * obs_vec[1]
-    aoff = np.pi * obs_vec[2]
-    R = 2000.0 * obs_vec[0]
+def heuristic_policy_continuous(obs_vec):
+    # obs: [R_norm, sin(brg), cos(brg), sin(aoff), cos(aoff), clos_norm, v_norm, sin(bank), cos(bank), ammo, (boost?)]
+    R = 2000.0 * float(np.clip(obs_vec[0], 0, 1))
+    brg = float(np.arctan2(obs_vec[1], obs_vec[2]))  # sin/cos -> açı
+    aoff = float(np.arctan2(obs_vec[3], obs_vec[4]))
+    # kaba yönlendirme: bearing işareti kadar yat
+    eps = np.deg2rad(3)
+    bank_rate = 0.0
+    if brg > eps: bank_rate = +1.0
+    if brg < -eps: bank_rate = -1.0
 
-    if brg > np.deg2rad(3): bank_cmd = 2
-    elif brg < -np.deg2rad(3): bank_cmd = 0
-    else: bank_cmd = 1
+    # hız: kapanma (clos_norm) negatifse yaklaş, pozitifse yavaşla
+    clos = 200.0 * np.arctanh(np.clip(obs_vec[5], -0.999, 0.999))
+    throttle = 1.0 if clos < 0 else (0.0 if clos > 120 else 0.5)
 
-    clos = 200.0 * np.arctanh(np.clip(obs_vec[3], -0.999, 0.999))
-    if clos < 0:      thr_cmd = 2
-    elif clos > 120:  thr_cmd = 0
-    else:             thr_cmd = 1
-
-    inside_wez = (R < 600.0) and (abs(brg) < np.deg2rad(20))
-    fire = 1 if (inside_wez and abs(aoff) < np.deg2rad(15)) else 0
-    return (bank_cmd, thr_cmd, fire)
-
+    # ateş: gevşek WEZ
+    inside_wez = (R < 800.0) and (abs(brg) < np.deg2rad(25)) and (abs(aoff) < np.deg2rad(20))
+    trigger_p = 1.0 if inside_wez else 0.0
+    return np.array([bank_rate, throttle, trigger_p], dtype=np.float32)
 
 # ----------------------------------------------------
 # 2) Rakip havuzlu tek-ajan Gym wrapper
@@ -55,21 +56,34 @@ class DogfightSoloEnvPool(gym.Env):
     def __init__(self, seed=0, opponent_pool=None, pool_probs=None):
         super().__init__()
         self.base = Dogfight1v1(seed=seed)
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(7,), dtype=np.float32)
-        self.action_space = spaces.MultiDiscrete([3, 3, 2])
 
-        # Opponent pool
+        # --- Observation & Action Space ---
+        # boost varsa 11, yoksa 10 boyutlu vektör
+        obs_dim = 10
+        if hasattr(self.base, "boost_energy_max"):
+            obs_dim += 1
+
+        self.observation_space = spaces.Box(
+            low=-1.0,
+            high=1.0,
+            shape=(obs_dim,),
+            dtype=np.float32
+        )
+
+        # Aksiyonlar: [bank_cmd, throttle_cmd, fire_cmd]
+        # (Henüz continuous değilse)
+        # self.action_space = spaces.MultiDiscrete([3, 3, 2])
+        # Eğer continuous moda geçtiysek yukarıdaki satır yerine şunu kullanırız:
+        self.action_space = spaces.Box(
+            low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
+            high=np.array([+1.0, 1.0, 1.0], dtype=np.float32)
+        )
+
+        # Opponent pool (değişmedi)
         self.opponent_pool = opponent_pool or ['heuristic']
-        self.pool_probs = None
-        if pool_probs is not None:
-            # normalize in case user passed unnormalized
-            p = np.array(pool_probs, dtype=np.float64)
-            self.pool_probs = (p / p.sum()).tolist()
+        self.pool_probs = pool_probs
         self._opponent_type = 'heuristic'
-        self._opponent_model_cache = {}  # path -> SB3 model
-        self._last_info = {}
-
-        # SB3 PPO class is used to load snapshots
+        self._opponent_model_cache = {}
         self._ppo_cls = PPO
 
     # ----- public API: dışarıdan havuzu güncelle -----
@@ -90,9 +104,9 @@ class DogfightSoloEnvPool(gym.Env):
     # ----- opponent aksiyonu -----
     def _opponent_act(self, obs_vec):
         if self._opponent_type == 'heuristic':
-            return heuristic_policy(obs_vec)
+            return heuristic_policy_continuous(obs_vec)
         else:
-            # SB3 snapshot modeli kullan
+           """ # SB3 snapshot modeli kullan
             model = self._opponent_model_cache.get(self._opponent_type, None)
             if model is None:
                 # .zip'i yükle ve cache'e koy
@@ -102,7 +116,8 @@ class DogfightSoloEnvPool(gym.Env):
             a, _ = model.predict(obs_vec, deterministic=True)
             # SB3 MultiDiscrete aksiyonunu düzleştir (np.array [3], int'lere çevir)
             a = np.asarray(a).astype(int).ravel()
-            return (int(a[0]), int(a[1]), int(a[2]))
+            return (int(a[0]), int(a[1]), int(a[2]))"""
+           return heuristic_policy_continuous(obs_vec)
 
     # ----- Gym API -----
     def _tuple_from_action(self, a):

@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 
 
-main_dir = 'runs/ppo_ippo_pool_20251101_134235/best_model/'
+main_dir = 'runs/rppo_lstm_pool_20251109_145454/final_model/'
 
 # model file
 model_file = main_dir + 'policy.pth'
