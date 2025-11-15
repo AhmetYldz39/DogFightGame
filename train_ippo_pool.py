@@ -1,8 +1,6 @@
 # train_ippo_pool.py
-# IPPO (PPO) + Opponent Pool (heuristic + snapshot'lar)
-# - SubprocVecEnv + VecNormalize + VecMonitor
-# - Entropy annealing
-# - Havuz: ['heuristic', 'path/to/snapshot.zip', ...]
+# PPO + Opponent Pool (şimdilik sadece HEURISTIC) + VecNormalize + VecMonitor
+# Continuous action (Box): [bank_rate ∈ [-1,1], throttle ∈ [0,1], trigger_prob ∈ [0,1]]
 #
 # Çalıştırma:
 #   python train_ippo_pool.py
@@ -20,35 +18,44 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv, VecNorm
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.logger import configure
 
-from dogfight_env import Dogfight1v1   # ← senin güncel env'in
+from dogfight_env import Dogfight1v1   # güncel continuous + sin/cos obs env'in
 
 # ----------------------------------------------------
-# 1) Heuristic bot (değişmedi)
+# 1) Heuristic bot (CONTINUOUS)
 # ----------------------------------------------------
 def heuristic_policy_continuous(obs_vec):
-    # obs: [R_norm, sin(brg), cos(brg), sin(aoff), cos(aoff), clos_norm, v_norm, sin(bank), cos(bank), ammo, (boost?)]
-    R = 2000.0 * float(np.clip(obs_vec[0], 0, 1))
-    brg = float(np.arctan2(obs_vec[1], obs_vec[2]))  # sin/cos -> açı
+    """
+    obs_vec: [R_norm, sin(brg), cos(brg), sin(aoff), cos(aoff),
+              clos_norm, v_norm, sin(bank), cos(bank), ammo(, boost?)]
+    """
+    # temel metrikleri geri al
+    R = 2000.0 * float(np.clip(obs_vec[0], 0.0, 1.0))
+    brg = float(np.arctan2(obs_vec[1], obs_vec[2]))       # sin/cos -> açı
     aoff = float(np.arctan2(obs_vec[3], obs_vec[4]))
-    # kaba yönlendirme: bearing işareti kadar yat
+    clos = 200.0 * np.arctanh(np.clip(obs_vec[5], -0.999, 0.999))
+
+    # bearing işaretine göre kaba yönlendirme
     eps = np.deg2rad(3)
     bank_rate = 0.0
-    if brg > eps: bank_rate = +1.0
+    if brg >  eps: bank_rate = +1.0
     if brg < -eps: bank_rate = -1.0
 
-    # hız: kapanma (clos_norm) negatifse yaklaş, pozitifse yavaşla
-    clos = 200.0 * np.arctanh(np.clip(obs_vec[5], -0.999, 0.999))
-    throttle = 1.0 if clos < 0 else (0.0 if clos > 120 else 0.5)
+    # closure'a göre throttle
+    if clos < 0:
+        throttle = 1.0
+    elif clos > 120:
+        throttle = 0.0
+    else:
+        throttle = 0.5
 
-    # ateş: gevşek WEZ
-    inside_wez = (R < 800.0) and (abs(brg) < np.deg2rad(25)) and (abs(aoff) < np.deg2rad(20))
+    # gevşetilmiş WEZ
+    inside_wez = (R < 900.0) and (abs(brg) < np.deg2rad(30)) and (abs(aoff) < np.deg2rad(25))
     trigger_p = 1.0 if inside_wez else 0.0
     return np.array([bank_rate, throttle, trigger_p], dtype=np.float32)
 
+
 # ----------------------------------------------------
-# 2) Rakip havuzlu tek-ajan Gym wrapper
-#    - Opponent pool: ['heuristic', '/path/snapshot1.zip', ...]
-#    - Snapshot modelleri env içinde cache'lenir; reset'te rastgele seçilir
+# 2) Rakip havuzlu tek-ajan Gym wrapper (continuous)
 # ----------------------------------------------------
 class DogfightSoloEnvPool(gym.Env):
     metadata = {"render_modes": []}
@@ -59,105 +66,81 @@ class DogfightSoloEnvPool(gym.Env):
 
         # --- Observation & Action Space ---
         # boost varsa 11, yoksa 10 boyutlu vektör
-        obs_dim = 10
-        if hasattr(self.base, "boost_energy_max"):
-            obs_dim += 1
+        obs_dim = 10 + (1 if hasattr(self.base, "boost_energy_max") else 0)
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
 
-        self.observation_space = spaces.Box(
-            low=-1.0,
-            high=1.0,
-            shape=(obs_dim,),
-            dtype=np.float32
-        )
-
-        # Aksiyonlar: [bank_cmd, throttle_cmd, fire_cmd]
-        # (Henüz continuous değilse)
-        # self.action_space = spaces.MultiDiscrete([3, 3, 2])
-        # Eğer continuous moda geçtiysek yukarıdaki satır yerine şunu kullanırız:
+        # Continuous action: [bank_rate, throttle, trigger_prob]
         self.action_space = spaces.Box(
             low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
             high=np.array([+1.0, 1.0, 1.0], dtype=np.float32)
         )
 
-        # Opponent pool (değişmedi)
+        # Opponent pool — şimdilik sadece heuristic (discrete snapshot'lar uyumsuz)
         self.opponent_pool = opponent_pool or ['heuristic']
         self.pool_probs = pool_probs
         self._opponent_type = 'heuristic'
         self._opponent_model_cache = {}
-        self._ppo_cls = PPO
+        self._ppo_cls = PPO  # ileride continuous snapshot yüklersen kullanılır
 
-    # ----- public API: dışarıdan havuzu güncelle -----
+    # ----- public API: havuzu güncelle -----
     def set_opponent_pool(self, pool_list, pool_probs=None):
-        self.opponent_pool = list(pool_list)
+        # Continuous snapshot'lar hazır olana dek yalnızca heuristic'i izinli tutalım
+        safe = ['heuristic']
+        for x in (pool_list or []):
+            if x == 'heuristic':
+                safe = ['heuristic']
+                break
+        self.opponent_pool = safe
         if pool_probs is None:
             self.pool_probs = None
         else:
             p = np.array(pool_probs, dtype=np.float64)
-            self.pool_probs = (p / p.sum()).tolist()
+            s = p.sum()
+            self.pool_probs = (p / s).tolist() if s > 0 else None
 
     # ----- opponent seç -----
     def _choose_opponent_spec(self):
-        if self.pool_probs is None or len(self.pool_probs) != len(self.opponent_pool):
-            return random.choice(self.opponent_pool)
-        return random.choices(self.opponent_pool, weights=self.pool_probs, k=1)[0]
+        # pratikte hep 'heuristic'
+        return 'heuristic'
 
-    # ----- opponent aksiyonu -----
+    # ----- opponent aksiyonu (continuous heuristic) -----
     def _opponent_act(self, obs_vec):
-        if self._opponent_type == 'heuristic':
-            return heuristic_policy_continuous(obs_vec)
-        else:
-           """ # SB3 snapshot modeli kullan
-            model = self._opponent_model_cache.get(self._opponent_type, None)
-            if model is None:
-                # .zip'i yükle ve cache'e koy
-                model = self._ppo_cls.load(self._opponent_type)
-                self._opponent_model_cache[self._opponent_type] = model
-            # Snapshot policy, single obs bekler; bizim obs_vec tek agent -> (1,7) shape
-            a, _ = model.predict(obs_vec, deterministic=True)
-            # SB3 MultiDiscrete aksiyonunu düzleştir (np.array [3], int'lere çevir)
-            a = np.asarray(a).astype(int).ravel()
-            return (int(a[0]), int(a[1]), int(a[2]))"""
-           return heuristic_policy_continuous(obs_vec)
+        return heuristic_policy_continuous(obs_vec)
 
     # ----- Gym API -----
-    def _tuple_from_action(self, a):
-        a = np.asarray(a).astype(int)
-        return (int(a[0]), int(a[1]), int(a[2]))
-
     def reset(self, *, seed=None, options=None):
         if seed is not None:
-            # base env kendi RNG'sini kullanıyor; burada dokunmuyoruz
+            # base env kendi RNG'sini kullanıyor
             pass
-        # Bu epizod için rakibi seç
-        spec = self._choose_opponent_spec()
-        self._opponent_type = spec  # 'heuristic' veya '/path/to/model.zip'
+        self._opponent_type = self._choose_opponent_spec()
         obs_dict = self.base.reset()
         self._last_info = {}
         return obs_dict[0], {}
 
     def step(self, action):
-        a0 = self._tuple_from_action(action)
+        # continuous aksiyonu doğrudan aktar
+        a0 = np.asarray(action, dtype=np.float32).ravel()
+        # rakip aksiyonu
         obs_dict = self.base._obs_all()
-        a1 = self._opponent_act(obs_dict[1])  # havuzdan seçilen rakip
+        a1 = self._opponent_act(obs_dict[1])
+
         obs_next, r, done, info = self.base.step({0: a0, 1: a1})
         self._last_info = info
+        # SB3 venv sözleşmesi: (obs, reward, terminated, truncated, info)
         return obs_next[0], float(r[0]), done, False, info
 
 
 # ----------------------------------------------------
-# 3) Değerlendirme (win-rate) – eğitim VecNormalize ile uyumlu
+# 3) Değerlendirme (win-rate) – VecNormalize ile uyumlu
 # ----------------------------------------------------
-def evaluate_trained(model, train_vecnorm, episodes=200, seed=4242, opponent_pool=None):
-    if opponent_pool is None:
-        opponent_pool = ['heuristic']
-
+def evaluate_trained(model, train_vecnorm, episodes=200, seed=4242):
     def make_one():
-        return DogfightSoloEnvPool(seed=seed, opponent_pool=opponent_pool)
+        return DogfightSoloEnvPool(seed=seed, opponent_pool=['heuristic'], pool_probs=[1.0])
 
     eval_env = DummyVecEnv([make_one])
     eval_env = VecMonitor(eval_env, filename=None)
     eval_env = VecNormalize(eval_env, training=False, norm_obs=True, norm_reward=False)
-    eval_env.obs_rms = train_vecnorm.obs_rms
+    eval_env.obs_rms = train_vecnorm.obs_rms  # eğitim istatistiklerini kopyala
 
     wins = 0
     for _ in range(episodes):
@@ -178,21 +161,21 @@ def evaluate_trained(model, train_vecnorm, episodes=200, seed=4242, opponent_poo
 
 
 # ----------------------------------------------------
-# 4) main – eğitim + snapshot ekleme + havuz güncelleme
+# 4) main – eğitim döngüsü (snapshot kapalı, entropi schedule açık)
 # ----------------------------------------------------
 if __name__ == "__main__":
-    run_name = time.strftime("ppo_ippo_pool_%Y%m%d_%H%M%S")
+    run_name = time.strftime("ppo_ippo_pool_cont_%Y%m%d_%H%M%S")
     log_dir = os.path.join("runs", run_name)
     os.makedirs(log_dir, exist_ok=True)
 
-    # Başlangıç havuzu: sadece heuristic
+    # Başlangıç havuzu: sadece heuristic (continuous)
     opponent_pool = ['heuristic']
 
-    # --------- Paralel eğitim ortamı (havuz destekli) ---------
+    # --------- Paralel eğitim ortamı ---------
     N_ENVS = 8
     def make_env(rank):
         def _f():
-            return DogfightSoloEnvPool(seed=10_000 + rank, opponent_pool=opponent_pool)
+            return DogfightSoloEnvPool(seed=10_000 + rank, opponent_pool=opponent_pool, pool_probs=[1.0])
         return _f
 
     train_env = SubprocVecEnv([make_env(i) for i in range(N_ENVS)])
@@ -200,8 +183,9 @@ if __name__ == "__main__":
     train_vecnorm = VecNormalize(train_env, norm_obs=True, norm_reward=True, clip_obs=5.0)
 
     # Logger
-    new_logger = configure(log_dir, ["stdout", "tensorboard"])
+    logger = configure(log_dir, ["stdout", "tensorboard"])
 
+    # Policy mimarisi
     policy_kwargs = dict(
         net_arch=dict(pi=[128, 128], vf=[128, 128]),
         activation_fn=nn.Tanh,
@@ -218,18 +202,18 @@ if __name__ == "__main__":
         gamma=0.995,
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.02,    # başlayınca yüksek; annealing ile düşüreceğiz
+        ent_coef=0.02,       # isterse 0.03 ile de başlayabilirsin
         vf_coef=0.5,
         verbose=1,
         tensorboard_log=log_dir,
         seed=42,
     )
-    model.set_logger(new_logger)
+    model.set_logger(logger)
 
-    # --------- Eval env (light parallel) ---------
+    # --------- Eval env ---------
     def make_eval_env(rank=0):
         def _f():
-            return DogfightSoloEnvPool(seed=99_000 + rank, opponent_pool=opponent_pool)
+            return DogfightSoloEnvPool(seed=99_000 + rank, opponent_pool=['heuristic'], pool_probs=[1.0])
         return _f
 
     raw_eval_env = SubprocVecEnv([make_eval_env(i) for i in range(2)])
@@ -247,41 +231,24 @@ if __name__ == "__main__":
         render=False,
     )
 
-    # --------- Eğitim & Snapshot planı ---------
-    # Milestones: adımlarda snapshot kaydet ve havuza ekle
+    # --------- Eğitim (snapshot yok) + entropi annealing ---------
     milestones = [200_000, 400_000, 600_000, 800_000]
     entropy_schedule = {200_000: 0.012, 500_000: 0.008, 800_000: 0.005}
-
     done_steps = 0
-    t0 = time.time()
 
     for target in milestones:
         chunk = target - done_steps
         model.learn(total_timesteps=chunk, reset_num_timesteps=False, callback=eval_callback)
         done_steps = target
 
-        # 1) Snapshot kaydet
-        snap_path = os.path.join(log_dir, f"snapshot_{done_steps}.zip")
-        model.save(snap_path)
-        print(f"[POOL] Snapshot saved: {snap_path}")
-
-        # 2) Havuzu güncelle (heuristic + yeni snapshotlar)
-        if snap_path not in opponent_pool:
-            opponent_pool.append(snap_path)
-        print(f"[POOL] New pool: {opponent_pool}")
-
-        # 3) Tüm eğitim env'lerine havuzu bildir
-        #    SubprocVecEnv: env_method ile alt süreçlerde set_opponent_pool çağır
-        train_env.env_method("set_opponent_pool", opponent_pool)
-
-        # 4) Eval env'lerini de güncelle
-        raw_eval_env.env_method("set_opponent_pool", opponent_pool)
-
-        # 5) Entropy annealing (milestone'a göre)
+        # Entropy annealing (milestone'a göre)
         if target in entropy_schedule:
-            new_ent = entropy_schedule[target]
-            model.ent_coef = new_ent
-            print(f"[ANNEAL] ent_coef -> {new_ent}")
+            model.ent_coef = entropy_schedule[target]
+            print(f"[ANNEAL] ent_coef -> {model.ent_coef}")
+
+        # Ara bilgi
+        wr_tmp = evaluate_trained(model, train_vecnorm, episodes=100)
+        print(f"[MILESTONE {done_steps}] WR vs HEUR(100): {wr_tmp:.2%}")
 
     # --------- Final kaydet ---------
     final_model_path = os.path.join(log_dir, "final_model.zip")
@@ -290,8 +257,6 @@ if __name__ == "__main__":
     print(f"[INFO] Final model saved: {final_model_path}")
 
     # --------- Geniş değerlendirme ---------
-    wr_heur = evaluate_trained(model, train_vecnorm, episodes=200, opponent_pool=['heuristic'])
-    wr_pool = evaluate_trained(model, train_vecnorm, episodes=200, opponent_pool=opponent_pool)
+    wr_heur = evaluate_trained(model, train_vecnorm, episodes=200)
     print(f"[EVAL] Win-rate vs HEURISTIC (200 ep): {wr_heur:.2%}")
-    print(f"[EVAL] Win-rate vs POOL (200 ep): {wr_pool:.2%}")
     print(f"[TENSORBOARD] tensorboard --logdir {log_dir}")

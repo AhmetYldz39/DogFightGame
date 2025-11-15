@@ -19,7 +19,7 @@ from train_ippo_pool import DogfightSoloEnvPool  # wrapper'ın continuous & sin/
 # -------------------------
 RUN_NAME_PREFIX = "rppo_sepLSTM_heur"
 N_ENVS = 8
-EVAL_EPISODES = 200
+EVAL_EPISODES = 100
 TOTAL_STEPS = 900_000
 # Entropy annealing: yüksek başlat, kademeli indir
 ENTROPY_SCHEDULE = [(0, 0.03), (300_000, 0.02), (600_000, 0.012), (850_000, 0.008)]
