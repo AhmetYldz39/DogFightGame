@@ -1,306 +1,350 @@
-# dogfight_env.py
-from collections import deque
 import numpy as np
-import gymnasium as gym
+from gymnasium import spaces
 
 
 class Dogfight1v1:
-
     def __init__(self, dt=0.1, arena=4000.0, seed=0):
         self.dt = dt
-        self.rng = np.random.default_rng(seed)
         self.arena = arena
-        self.max_steps = int(240 / self.dt)  # ~4 dk ep. (0.1 dt için 2400 adım)
-        # Dinamik parametreler
-        self.BDEL = np.deg2rad(6.0)
-        self.vmin, self.vmax = 60.0, 240.0
-        self.turn_k = 0.6     # bank->turn kazancı
-        self.thr_k = 20.0     # throttle ivme kazancı
+        self.rng = np.random.default_rng(seed)
 
-        # Curriculum-friendly WEZ ve PK (daha sonra sıkılaştıracağız)
-        self.wez_R = 900.0
-        self.wez_ang = np.deg2rad(30.0)
-        self.base_pk = 0.65
+        # ---- Model parametreleri ----
+        self.g = 9.81
+        self.mass = 1000.0
+        self.thr_min = 0.0
+        self.thr_max = 1.0
+        self.bank_max = np.deg2rad(60.0)
+        self.v_min = 100.0
+        self.v_max = 300.0
+        self.v_drag = 0.002
+
+        # ---- WEZ / PK ----
+        self.wez_R = 750.0
+        self.wez_ang = np.deg2rad(22.0)
+        self.base_pk = 0.55
         self.bullet_speed = 300.0
-        self.lead_gate_tol = np.deg2rad(28.0)
+        self.lead_gate_tol = np.deg2rad(20.0)
 
-        # Komut gecikmeleri
+        # ---- Reward weights ----
+        self.track_w = 0.002
+
+        # ---- Ammo ----
+        self.initial_ammo = 80
+
+        # ---- Episode limitleri ----
+        self.max_steps = 1200  # dt=0.1 ise ~120 saniye
+
+        # ---- Fire cooldown ----
+        self.fire_cd_steps = 3  # 3 step ateş edemez
+
+        # ---- Action delays ----
         self.delay_bank_steps = 2
         self.delay_thr_steps = 2
-        self.delay_fire_steps = 0  # tetikte gecikme genelde istemiyoruz
+        self.delay_fire_steps = 0
 
-        # --- Ölçüm (sensor) gürültüsü ---
-        self.noise_bearing_std = np.deg2rad(1.0)
-        self.noise_aoff_std = np.deg2rad(1.5)
-        self.noise_range_std = 2.0  # metre
-        self.noise_clos_std = 2.0   # m/s
-        self.noise_speed_std = 0.5  # m/s
-        self.noise_bank_std = np.deg2rad(0.5)
+        # ---- OBS / ACTION SPACE TANIMI ----
+        # OBS vektörünün boyutu: _obs() fonksiyonunda return ettiğin uzunluk
+        # Örnek: [R_norm, sin(brg), cos(brg), sin(aoff), cos(aoff),
+        #         clos_norm, v_norm, sin(bank), cos(bank), ammo_norm]
+        obs_dim = 10  # kendi _obs fonksiyonuna göre bu sayıyı AYNI yap
 
-        # Süreç gürültüsü / rüzgâr (küçük)
-        self.wind_vel_std = 0.5  # m/s
-
-        # --- Gözlem boyutu (sin/cos açı kodlama) ---
-        obs_dim = 10  # [R, sin/cos(brg), sin/cos(aoff), clos, v_norm, sin/cos(bank), ammo]
-        if hasattr(self, "boost_energy_max"):
-            obs_dim += 1  # opsiyonel boost_norm
-
-        self.observation_space = gym.spaces.Box(
-            low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32
+        self.observation_space = spaces.Box(
+            low=-1.0,
+            high=1.0,
+            shape=(obs_dim,),
+            dtype=np.float32,
         )
-        # Action space: continuous (bank_rate, throttle, trigger_prob)
-        self.action_space = gym.spaces.Box(
+
+        # Aksiyon: [bank_rate, throttle, trigger_prob]
+        self.action_space = spaces.Box(
             low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
             high=np.array([+1.0, 1.0, 1.0], dtype=np.float32),
+            dtype=np.float32,
         )
 
         self.reset()
 
+    # ------------------------------------------------------------
+
     def reset(self):
-        self.steps = 0
-        # [x, y, v, psi, bank] x 2
         self.s = np.zeros((2, 5), dtype=np.float32)
+        for i in (0, 1):
+            ang = self.rng.uniform(0, 2 * np.pi)
+            rad = self.rng.uniform(1000, 1800)
+            self.s[i, 0] = rad * np.cos(ang)
+            self.s[i, 1] = rad * np.sin(ang)
+            self.s[i, 2] = self.rng.uniform(170, 220)
+            self.s[i, 3] = self.rng.uniform(-np.pi, np.pi)
+            self.s[i, 4] = 0.0
 
-        # Curriculum spawn (kolay): saldıran (0) hedefe yakın ve uygun açıyla
-        easy = True
-        if easy:
-            self.s[1, :] = [
-                0.0,
-                0.0,
-                self.rng.uniform(140, 180),
-                self.rng.uniform(-np.pi, np.pi),
-                0.0,
-            ]
-            psi_t = self.s[1, 3]
-            R0 = self.rng.uniform(600, 1000)  # daha yakın
-            off = self.rng.uniform(-np.deg2rad(25), np.deg2rad(25))
-            self.s[0, :] = [
-                -R0 * np.cos(psi_t),
-                -R0 * np.sin(psi_t),
-                self.rng.uniform(150, 190),
-                psi_t + off,
-                0.0,
-            ]
-        else:
-            # Genel rastgele spawn
-            R0 = self.rng.uniform(1000, 1800)
-            ang = self.rng.uniform(-np.pi / 2, np.pi / 2)
-            self.s[0, :] = [0.0, 0.0, self.rng.uniform(120, 180), ang, 0.0]
-            self.s[1, :] = [
-                R0 * np.cos(ang + np.pi),
-                R0 * np.sin(ang + np.pi),
-                self.rng.uniform(120, 180),
-                ang + np.pi,
-                0.0,
-            ]
+        self.hp = np.ones(2, dtype=np.float32)
+        self.ammo = np.array([self.initial_ammo, self.initial_ammo], dtype=np.int32)
 
-        self.ammo = np.array([120, 120], dtype=np.int32)
-        self.hp = np.array([1.0, 1.0], dtype=np.float32)
+        self.bank_queue = [[], []]
+        self.thr_queue = [[], []]
+        self.fire_queue = [[], []]
 
-        # Komut gecikme tamponları
-        neutral = (0.0, 0.5, 0.0)  # bank_rate=0, throttle=orta, trigger=0
-        maxlen = max(self.delay_bank_steps, self.delay_thr_steps, self.delay_fire_steps) + 1
-        self.cmd_buf = {
-            0: deque([neutral] * maxlen, maxlen=maxlen),
-            1: deque([neutral] * maxlen, maxlen=maxlen),
-        }
-
-        # jerk cezası için önceki bank kaydı
         self._prev_bank = np.zeros(2, dtype=np.float32)
+
+        self.fire_cd = np.zeros(2, dtype=np.int32)
+
+        # episode step sayacı
+        self.steps = 0
 
         return self._obs_all()
 
-    def step(self, actions):  # actions: {0:(bank_rate,thr_cmd,trigger_p), 1:(...)}, continuous
-        self.steps += 1
-        r = np.zeros(2, dtype=np.float32)
-        r += -2e-5  # küçük zaman cezası (azaltıldı)
+    # ------------------------------------------------------------
+
+    def _obs(self, i: int) -> np.ndarray:
+        """
+        Ajan i için GÜRÜLTÜLÜ (ölçüm) gözlem vektörü döndür.
+        Obs vektörü boyutu: 10
+          0: R_norm           (0..1,  0 -> 0m, 1 -> 2000m+)
+          1: sin(brg)         (hedef bearing)
+          2: cos(brg)
+          3: sin(aoff)        (aim-off açısı)
+          4: cos(aoff)
+          5: tanh(clos/200)   (closure, +-200 m/s skala)
+          6: v_norm           ((v - vmin)/(vmax - vmin))
+          7: sin(bank)
+          8: cos(bank)
+          9: ammo_norm        (ammo / ammo_cap, 0..1)
+        """
+        j = 1 - i
+
+        # --- gerçek (gürültüsüz) relatifler ---
+        dx = self.s[j, 0] - self.s[i, 0]
+        dy = self.s[j, 1] - self.s[i, 1]
+        R = np.hypot(dx, dy)
+
+        # own / tgt heading
+        own_hdg = self.s[i, 3]
+        tgt_hdg = self.s[j, 3]
+
+        # bearing (hedef, uçağın burnuna göre)  -pi..pi
+        brg = (np.arctan2(dy, dx) - own_hdg + np.pi) % (2 * np.pi) - np.pi
+        # aim-off (hedef heading'i ile own heading farkı) -pi..pi
+        aoff = (tgt_hdg - own_hdg + np.pi) % (2 * np.pi) - np.pi
+
+        # relatif hız vektörleri (closure için)
+        vij = self.s[j, 2] * np.array([np.cos(tgt_hdg), np.sin(tgt_hdg)])
+        vii = self.s[i, 2] * np.array([np.cos(own_hdg), np.sin(own_hdg)])
+        vrel = vij - vii
+        clos = -(dx * vrel[0] + dy * vrel[1]) / (R + 1e-6)
+
+        v_true = self.s[i, 2]
+        bank_true = self.s[i, 4]
+
+        # --- ölçüm gürültüsü EKLE (normalize ETMEDEN önce) ---
+        R_n = R + self.rng.normal(loc=0.0, scale=getattr(self, "noise_range_std", 0.0))
+        brg_n = brg + self.rng.normal(loc=0.0, scale=getattr(self, "noise_bearing_std", 0.0))
+        aoff_n = aoff + self.rng.normal(loc=0.0, scale=getattr(self, "noise_aoff_std", 0.0))
+        clos_n = clos + self.rng.normal(loc=0.0, scale=getattr(self, "noise_clos_std", 0.0))
+        v_n = v_true + self.rng.normal(loc=0.0, scale=getattr(self, "noise_speed_std", 0.0))
+        bank_n = bank_true + self.rng.normal(loc=0.0, scale=getattr(self, "noise_bank_std", 0.0))
+
+        o = np.array(
+            [
+                np.clip(R_n / 2000.0, 0.0, 1.0),  # 0: range norm
+                np.sin(brg_n),                   # 1
+                np.cos(brg_n),                   # 2
+                np.sin(aoff_n),                  # 3
+                np.cos(aoff_n),                  # 4
+                np.tanh(clos_n / 200.0),         # 5
+                (v_n - self.v_min) / (self.v_max - self.v_min + 1e-6),  # 6
+                np.sin(bank_n),                  # 7
+                np.cos(bank_n),                  # 8
+                min(1.0, self.ammo[i] / self.initial_ammo),  # 9
+            ],
+            dtype=np.float32,
+        )
+
+        return np.clip(o, -1.0, 1.0)
+
+    def _obs_all(self):
+        return [self._obs(0), self._obs(1)]
+
+    # ------------------------------------------------------------
+
+    def step(self, actions):
         done = False
         info = {}
+        r = np.zeros(2, dtype=np.float32)
 
-        # 1) Gelen komutları gecikme tamponlarına yaz
-        for i in (0, 1):
-            self.cmd_buf[i].append(actions[i])
+        # step sayacını artır
+        self.steps += 1
 
-        # 2) Gecikmeli uygulanacak komutları oku
-        delayed_actions = {}
-        for i in (0, 1):
-            a_latest = np.asarray(self.cmd_buf[i][-1], dtype=float).ravel()
-            if a_latest.size < 3:
-                a_latest = np.pad(a_latest, (0, 3 - a_latest.size))
-            bank_rate, thr_cmd, trig = a_latest
-
-            if self.delay_bank_steps > 0:
-                a = np.asarray(self.cmd_buf[i][-(self.delay_bank_steps + 1)], dtype=float).ravel()
-                if a.size >= 1:
-                    bank_rate = float(a[0])
-            if self.delay_thr_steps > 0:
-                a = np.asarray(self.cmd_buf[i][-(self.delay_thr_steps + 1)], dtype=float).ravel()
-                if a.size >= 2:
-                    thr_cmd = float(a[1])
-            if self.delay_fire_steps > 0:
-                a = np.asarray(self.cmd_buf[i][-(self.delay_fire_steps + 1)], dtype=float).ravel()
-                if a.size >= 3:
-                    trig = float(a[2])
-
-            bank_rate = float(np.clip(bank_rate, -1.0, 1.0))
-            thr_cmd = float(np.clip(thr_cmd, 0.0, 1.0))
-            trig = float(np.clip(trig, 0.0, 1.0))
-
-            delayed_actions[i] = (bank_rate, thr_cmd, trig)
-
-        # 3) Durum güncelle (continuous)
-        bank_rate_max = getattr(self, "bank_rate_max", np.deg2rad(20.0))  # rad/s
-        for i in (0, 1):
-            bank_rate, thr_cmd, _ = delayed_actions[i]
-
-            prev_bank = self.s[i, 4]
-            self.s[i, 4] = np.clip(
-                prev_bank + (bank_rate * bank_rate_max) * self.dt,
-                -np.deg2rad(60),
-                np.deg2rad(60),
-            )
-            # heading
-            self.s[i, 3] = (self.s[i, 3] + self.turn_k * self.s[i, 4] * self.dt + np.pi) % (2 * np.pi) - np.pi
-            # speed
-            v_target = self.vmin + thr_cmd * (self.vmax - self.vmin)
-            v = self.s[i, 2] + self.thr_k * (v_target - self.s[i, 2]) / self.vmax * self.dt
-            self.s[i, 2] = np.clip(v, self.vmin, self.vmax)
-
-            # jerk cezası (bank değişimi)
-            r[i] += -0.0005 * abs(self.s[i, 4] - self._prev_bank[i])
-            self._prev_bank[i] = self.s[i, 4]
-
-        # 4) Konum + süreç gürültüsü
-        for i in (0, 1):
-            x, y, v, psi, _ = self.s[i]
-            wx = self.rng.normal(0.0, self.wind_vel_std)
-            wy = self.rng.normal(0.0, self.wind_vel_std)
-            self.s[i, 0] = x + (v * np.cos(psi) + wx) * self.dt
-            self.s[i, 1] = y + (v * np.sin(psi) + wy) * self.dt
-
-        # 5) Arena sınırı cezası
-        for i in (0, 1):
-            if np.hypot(self.s[i, 0], self.s[i, 1]) > self.arena:
-                r[i] -= 0.01
-
-        # 6) Relatif metrik
+        # ---- Utility: relative geometry ----
         def rel(i, j):
-            dx, dy = self.s[j, 0] - self.s[i, 0], self.s[j, 1] - self.s[i, 1]
+            dx = self.s[j, 0] - self.s[i, 0]
+            dy = self.s[j, 1] - self.s[i, 1]
             R = np.hypot(dx, dy)
-            brg = (np.arctan2(dy, dx) - self.s[i, 3] + np.pi) % (2 * np.pi) - np.pi
-            aoff = (self.s[i, 3] - self.s[j, 3] + np.pi) % (2 * np.pi) - np.pi
-            vij = self.s[j, 2] * np.array([np.cos(self.s[j, 3]), np.sin(self.s[j, 3])])
-            vii = self.s[i, 2] * np.array([np.cos(self.s[i, 3]), np.sin(self.s[i, 3])])
-            relv = vij - vii
-            clos = -(dx * relv[0] + dy * relv[1]) / (R + 1e-6)
-            return R, brg, aoff, clos
-
-        # 7) Ödül shaping + atış
-        for i in (0, 1):
-            j = 1 - i
-            R, brg, aoff, clos = rel(i, j)
-
-            # Lead-angle (ön nişan)
-            dx, dy = self.s[j, 0] - self.s[i, 0], self.s[j, 1] - self.s[i, 1]
             psi_i = self.s[i, 3]
             psi_j = self.s[j, 3]
+            brg = (np.arctan2(dy, dx) - psi_i + np.pi) % (2 * np.pi) - np.pi
+            aoff = ((psi_j - psi_i + np.pi) % (2 * np.pi)) - np.pi
+            vij = self.s[j, 2] * np.cos(psi_j - psi_i) - self.s[i, 2]
+            clos = vij
+            return R, brg, aoff, clos
+
+        # ----------------------------------------------------
+        # 1. ACTION PROCESSING WITH DELAYS
+        # ----------------------------------------------------
+        delayed_actions = []
+        for i in (0, 1):
+            a_bank = float(np.clip(actions[i][0], -1.0, 1.0))
+            a_thr = float(np.clip(actions[i][1], 0.0, 1.0))
+            a_fire = float(np.clip(actions[i][2], 0.0, 1.0))
+
+            self.bank_queue[i].append(a_bank)
+            if len(self.bank_queue[i]) > self.delay_bank_steps:
+                a_bank = self.bank_queue[i].pop(0)
+
+            self.thr_queue[i].append(a_thr)
+            if len(self.thr_queue[i]) > self.delay_thr_steps:
+                a_thr = self.thr_queue[i].pop(0)
+
+            self.fire_queue[i].append(a_fire)
+            if len(self.fire_queue[i]) > self.delay_fire_steps:
+                a_fire = self.fire_queue[i].pop(0)
+
+            delayed_actions.append((a_bank, a_thr, a_fire))
+
+        # ----------------------------------------------------
+        # 2. EULER INTEGRATION
+        # ----------------------------------------------------
+        for i in (0, 1):
+            a_bank, a_thr, _ = delayed_actions[i]
+
+            self.s[i, 4] = np.clip(a_bank * self.bank_max, -self.bank_max, self.bank_max)
+            thr = np.clip(a_thr, 0.0, 1.0)
+
+            v = self.s[i, 2]
+            lift = np.cos(self.s[i, 4])
+            dv = thr * 30 - self.v_drag * v * v
+            self.s[i, 2] = np.clip(v + dv * self.dt, self.v_min, self.v_max)
+
+            self._prev_bank[i] = self.s[i, 4]
+
+            self.s[i, 3] = (self.s[i, 3] + np.tan(self.s[i, 4]) * self.dt) % (2 * np.pi)
+
+            vx = self.s[i, 2] * np.cos(self.s[i, 3])
+            vy = self.s[i, 2] * np.sin(self.s[i, 3])
+            self.s[i, 0] += vx * self.dt
+            self.s[i, 1] += vy * self.dt
+
+        # ----------------------------------------------------
+        # 3. REWARD + FIRE LOGIC
+        # ----------------------------------------------------
+        for i in (0, 1):
+            j = 1 - i
+
+            R, brg, aoff, clos = rel(i, j)
+
+            # Predict lead error
+            psi_i = self.s[i, 3]
+            psi_j = self.s[j, 3]
+            dx = self.s[j, 0] - self.s[i, 0]
+            dy = self.s[j, 1] - self.s[i, 1]
             v_j = self.s[j, 2]
-            vjx, vjy = v_j * np.cos(psi_j), v_j * np.sin(psi_j)
+
             t_hit = R / (self.bullet_speed + 1e-6)
-            lead_x = dx + vjx * t_hit
-            lead_y = dy + vjy * t_hit
+            lead_x = dx + v_j * np.cos(psi_j) * t_hit
+            lead_y = dy + v_j * np.sin(psi_j) * t_hit
             lead_bearing = (np.arctan2(lead_y, lead_x) - psi_i + np.pi) % (2 * np.pi) - np.pi
             lead_err = abs(lead_bearing)
 
             inside_wez = (R < self.wez_R) and (abs(brg) < self.wez_ang)
+            lead_ok = (lead_err < self.lead_gate_tol)
 
-            # Shaping (cömert)
+            # ---- Shaping ----
             r[i] += 0.008 * inside_wez
             r[i] += -0.0004 * abs(aoff)
             r[i] += -0.00008 * R
 
-            # Tetik
-            _, _, trig = delayed_actions[i]
-            fire = (trig > 0.5)
+            if i == 0:  # only RL agent
+                r[i] += self.track_w * np.cos(lead_err)
 
-            if fire and self.ammo[i] > 0:
+            # ---- FIRE GATING ----
+            _, _, fire_raw = delayed_actions[i]
+            fire_attempt = fire_raw > 0.5
+
+            # cooldown countdown
+            if self.fire_cd[i] > 0:
+                self.fire_cd[i] -= 1
+
+            trigger_cmd = fire_attempt
+
+            # WEZ dışı hard gate
+            if not inside_wez:
+                if fire_attempt and self.ammo[i] > 0:
+                    r[i] -= 0.01
+                trigger_cmd = False
+
+            # WEZ içinde soft quality filter
+            if trigger_cmd and inside_wez:
+                qual = max(0.0, np.cos(lead_err))
+
+                r[i] += 0.001 * qual
+
+                if self.rng.random() > qual:
+                    trigger_cmd = False
+
+            # Cooldown
+            if self.fire_cd[i] > 0:
+                trigger_cmd = False
+
+            # ------------------------------
+            #  Real firing event
+            # ------------------------------
+            if trigger_cmd and self.ammo[i] > 0:
                 self.ammo[i] -= 1
-                if inside_wez:
-                    # WEZ içi bonus (erken öğrenme)
+                self.fire_cd[i] = self.fire_cd_steps
+
+                r[i] -= 0.01 * (1.0 - self.ammo[i] / self.initial_ammo)
+
+                if inside_wez and lead_ok:
                     r[i] += 0.01
-                    # pk: lead hatasına bağlı
                     pk = self.base_pk * np.exp(- (lead_err / self.lead_gate_tol) ** 2)
                     pk = float(np.clip(pk, 0.10, 0.90))
+
                     if self.rng.random() < pk:
                         r[i] += 0.2
                         r[j] -= 0.2
                         self.hp[j] -= 0.5
-                        if self.hp[j] <= 0.0:
+
+                        if self.hp[j] <= 0:
                             r[i] += 0.8
                             r[j] -= 0.8
                             done = True
                             info["winner"] = i
+
                 else:
-                    # WEZ dışı ateşe yumuşak ceza (erken aşama)
                     r[i] -= 0.01
 
-        # 8) Bitiş ve gözlem
-        obs = self._obs_all()
-        if self.steps >= self.max_steps:
+        # ----------------------------------------------------
+        # 8. CHECK TERMINATION
+        # ----------------------------------------------------
+        # Arena dışı / HP sıfır kontrolü
+        for i in (0, 1):
+            if (
+                abs(self.s[i, 0]) > self.arena
+                or abs(self.s[i, 1]) > self.arena
+                or self.hp[i] <= 0
+            ):
+                done = True
+
+        # --- Ammo limit + zaman limiti ---
+        if not done and (
+                (self.ammo[0] <= 0 and self.ammo[1] <= 0)
+                or (self.steps >= self.max_steps)
+        ):
             done = True
+            if "winner" not in info:
+                # Agent 0 açısından bakıyoruz: kill yoksa kaybetmiş say
+                info["winner"] = 1
+                # İstersen ufak bir reward cezası:
+                r[0] -= 0.5
+                r[1] += 0.5
 
-        # Güvenlik: NaN/Inf yakala (debug için)
-        if not (np.all(np.isfinite(self.s)) and np.all(np.isfinite(obs[0])) and np.all(np.isfinite(obs[1]))):
-            done = True
-            info["truncated"] = True
-            info["nan_guard"] = True
-
-        info["hp0"] = float(self.hp[0])
-        info["hp1"] = float(self.hp[1])
-        return obs, r, done, info
-
-    def _obs(self, i):
-        """Ajan i için GÜRÜLTÜLÜ (ölçüm) gözlem vektörü (sin/cos açı kodlaması)."""
-        j = 1 - i
-
-        # Gerçek relatifler
-        dx, dy = self.s[j, 0] - self.s[i, 0], self.s[j, 1] - self.s[i, 1]
-        R = np.hypot(dx, dy)
-        brg = (np.arctan2(dy, dx) - self.s[i, 3] + np.pi) % (2 * np.pi) - np.pi
-        aoff = (self.s[i, 3] - self.s[j, 3] + np.pi) % (2 * np.pi) - np.pi
-        vij = self.s[j, 2] * np.array([np.cos(self.s[j, 3]), np.sin(self.s[j, 3])])
-        vii = self.s[i, 2] * np.array([np.cos(self.s[i, 3]), np.sin(self.s[i, 3])])
-        relv = vij - vii
-        clos = -(dx * relv[0] + dy * relv[1]) / (R + 1e-6)
-
-        # Ölçüm gürültüsü
-        R_n = R + self.rng.normal(0.0, self.noise_range_std)
-        brg_n = brg + self.rng.normal(0.0, self.noise_bearing_std)
-        aoff_n = aoff + self.rng.normal(0.0, self.noise_aoff_std)
-        clos_n = clos + self.rng.normal(0.0, self.noise_clos_std)
-        v_n = self.s[i, 2] + self.rng.normal(0.0, self.noise_speed_std)
-        bank_n = self.s[i, 4] + self.rng.normal(0.0, self.noise_bank_std)
-
-        # Sin/cos açı kodlama
-        brg_s, brg_c = np.sin(brg_n), np.cos(brg_n)
-        aoff_s, aoff_c = np.sin(aoff_n), np.cos(aoff_n)
-        bank_s, bank_c = np.sin(bank_n), np.cos(bank_n)
-
-        ammo_cap = 120.0
-        o_list = [
-            np.clip(R_n / 2000.0, 0.0, 1.0),
-            brg_s, brg_c,
-            aoff_s, aoff_c,
-            np.tanh(clos_n / 200.0),
-            (v_n - self.vmin) / (self.vmax - self.vmin),
-            bank_s, bank_c,
-            min(1.0, self.ammo[i] / ammo_cap),
-        ]
-        if hasattr(self, "boost_energy") and hasattr(self, "boost_energy_max"):
-            o_list.append(float(self.boost_energy[i] / (self.boost_energy_max + 1e-6)))
-
-        o = np.array(o_list, dtype=np.float32)
-        return np.clip(o, -1.0, 1.0)
-
-    def _obs_all(self):
-        return {0: self._obs(0), 1: self._obs(1)}
+        return self._obs_all(), r, done, info

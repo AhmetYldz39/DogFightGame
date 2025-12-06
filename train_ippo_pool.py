@@ -7,131 +7,20 @@
 
 import os
 import time
-import random
-import numpy as np
-import gymnasium as gym
+#import numpy as np
+#import gymnasium as gym
 import torch.nn as nn
 
-from gymnasium import spaces
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv, VecNormalize, VecMonitor
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.logger import configure
 
-from dogfight_env import Dogfight1v1   # güncel continuous + sin/cos obs env'in
-
-# ----------------------------------------------------
-# 1) Heuristic bot (CONTINUOUS)
-# ----------------------------------------------------
-def heuristic_policy_continuous(obs_vec):
-    """
-    obs_vec: [R_norm, sin(brg), cos(brg), sin(aoff), cos(aoff),
-              clos_norm, v_norm, sin(bank), cos(bank), ammo(, boost?)]
-    """
-    # temel metrikleri geri al
-    R = 2000.0 * float(np.clip(obs_vec[0], 0.0, 1.0))
-    brg = float(np.arctan2(obs_vec[1], obs_vec[2]))       # sin/cos -> açı
-    aoff = float(np.arctan2(obs_vec[3], obs_vec[4]))
-    clos = 200.0 * np.arctanh(np.clip(obs_vec[5], -0.999, 0.999))
-
-    # bearing işaretine göre kaba yönlendirme
-    eps = np.deg2rad(3)
-    bank_rate = 0.0
-    if brg >  eps: bank_rate = +1.0
-    if brg < -eps: bank_rate = -1.0
-
-    # closure'a göre throttle
-    if clos < 0:
-        throttle = 1.0
-    elif clos > 120:
-        throttle = 0.0
-    else:
-        throttle = 0.5
-
-    # gevşetilmiş WEZ
-    inside_wez = (R < 900.0) and (abs(brg) < np.deg2rad(30)) and (abs(aoff) < np.deg2rad(25))
-    trigger_p = 1.0 if inside_wez else 0.0
-    return np.array([bank_rate, throttle, trigger_p], dtype=np.float32)
+from dogfight_wrappers import DogfightSoloEnvPool  # <--- buradan
 
 
 # ----------------------------------------------------
-# 2) Rakip havuzlu tek-ajan Gym wrapper (continuous)
-# ----------------------------------------------------
-class DogfightSoloEnvPool(gym.Env):
-    metadata = {"render_modes": []}
-
-    def __init__(self, seed=0, opponent_pool=None, pool_probs=None):
-        super().__init__()
-        self.base = Dogfight1v1(seed=seed)
-
-        # --- Observation & Action Space ---
-        # boost varsa 11, yoksa 10 boyutlu vektör
-        obs_dim = 10 + (1 if hasattr(self.base, "boost_energy_max") else 0)
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
-
-        # Continuous action: [bank_rate, throttle, trigger_prob]
-        self.action_space = spaces.Box(
-            low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
-            high=np.array([+1.0, 1.0, 1.0], dtype=np.float32)
-        )
-
-        # Opponent pool — şimdilik sadece heuristic (discrete snapshot'lar uyumsuz)
-        self.opponent_pool = opponent_pool or ['heuristic']
-        self.pool_probs = pool_probs
-        self._opponent_type = 'heuristic'
-        self._opponent_model_cache = {}
-        self._ppo_cls = PPO  # ileride continuous snapshot yüklersen kullanılır
-
-    # ----- public API: havuzu güncelle -----
-    def set_opponent_pool(self, pool_list, pool_probs=None):
-        # Continuous snapshot'lar hazır olana dek yalnızca heuristic'i izinli tutalım
-        safe = ['heuristic']
-        for x in (pool_list or []):
-            if x == 'heuristic':
-                safe = ['heuristic']
-                break
-        self.opponent_pool = safe
-        if pool_probs is None:
-            self.pool_probs = None
-        else:
-            p = np.array(pool_probs, dtype=np.float64)
-            s = p.sum()
-            self.pool_probs = (p / s).tolist() if s > 0 else None
-
-    # ----- opponent seç -----
-    def _choose_opponent_spec(self):
-        # pratikte hep 'heuristic'
-        return 'heuristic'
-
-    # ----- opponent aksiyonu (continuous heuristic) -----
-    def _opponent_act(self, obs_vec):
-        return heuristic_policy_continuous(obs_vec)
-
-    # ----- Gym API -----
-    def reset(self, *, seed=None, options=None):
-        if seed is not None:
-            # base env kendi RNG'sini kullanıyor
-            pass
-        self._opponent_type = self._choose_opponent_spec()
-        obs_dict = self.base.reset()
-        self._last_info = {}
-        return obs_dict[0], {}
-
-    def step(self, action):
-        # continuous aksiyonu doğrudan aktar
-        a0 = np.asarray(action, dtype=np.float32).ravel()
-        # rakip aksiyonu
-        obs_dict = self.base._obs_all()
-        a1 = self._opponent_act(obs_dict[1])
-
-        obs_next, r, done, info = self.base.step({0: a0, 1: a1})
-        self._last_info = info
-        # SB3 venv sözleşmesi: (obs, reward, terminated, truncated, info)
-        return obs_next[0], float(r[0]), done, False, info
-
-
-# ----------------------------------------------------
-# 3) Değerlendirme (win-rate) – VecNormalize ile uyumlu
+# 1) Değerlendirme (win-rate) – VecNormalize ile uyumlu
 # ----------------------------------------------------
 def evaluate_trained(model, train_vecnorm, episodes=200, seed=4242):
     def make_one():
