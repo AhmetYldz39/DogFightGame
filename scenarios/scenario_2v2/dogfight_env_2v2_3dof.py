@@ -30,7 +30,7 @@ class Dogfight2v2_3DOF:
         # ---- Action: [nx, nz, mu, fire] ----
         self.action_space = spaces.Box(
             low=np.array([-1.0, 0.0, -np.deg2rad(60), 0.0], dtype=np.float32),
-            high=np.array([1.5, 9.0,  np.deg2rad(60), 1.0], dtype=np.float32),
+            high=np.array([1.5, 3.0,  np.deg2rad(60), 1.0], dtype=np.float32),
         )
 
         # ---- Observation ----
@@ -61,15 +61,16 @@ class Dogfight2v2_3DOF:
 
         # ---- Logging ----
         self.enable_logging = False
-        self.log_dir = "runs/replays_tmp"
-        self.episode_id = 0
+        self.log_dir = "runs/runs_2v2/replays_tmp"
+        #self.episode_id = 0
+        self.episode_tag = "ep"
 
         self.reset()
 
     # -----------------------------------------------------
 
     def reset(self):
-        self.episode_id += 1
+        #self.episode_id += 1
         self.steps = 0
 
         self.s = np.zeros((self.n_agents, 6), dtype=np.float32)
@@ -184,6 +185,7 @@ class Dogfight2v2_3DOF:
         reward = {i: 0.0 for i in self.team_A}
         done = False
         info = {}
+        dists = []
 
         for i in range(self.n_agents):
             if self.fire_cd[i] > 0:
@@ -200,17 +202,23 @@ class Dogfight2v2_3DOF:
 
         for i in self.team_A:
             for j in self.team_B:
+                reward[i] -= 0.003  # time penalty
                 if self.hp[j] <= 0:
                     continue
 
                 R, brg, _, _ = self._rel_geom(i, j)
+                dists.append(R)
                 lead_err = self._lead_error(i, j)
 
                 inside_wez = (R < self.wez_R) and (abs(brg) < self.wez_ang)
+                if inside_wez:
+                    reward[i] += 0.05
+
                 lead_ok = lead_err < self.lead_gate
 
                 reward[i] += self.track_w * np.cos(lead_err)
                 reward[i] += -0.0001 * R
+                reward[i] += 0.15 * np.exp(-R / 2000.0)
 
                 fire_p = actions[i][3]
                 fire_cmd = (
@@ -223,6 +231,7 @@ class Dogfight2v2_3DOF:
                 if fire_cmd:
                     self.ammo[i] -= 1
                     self.fire_cd[i] = self.fire_cd_steps
+                    reward[i] += 0.02
 
                     if lead_ok:
                         pk = self.base_pk * np.exp(-(lead_err / self.lead_gate) ** 2)
@@ -238,10 +247,17 @@ class Dogfight2v2_3DOF:
         # ---------- TIME LIMIT TERMINATION ----------
         if self.steps >= self.max_steps and not done:
             done = True
-            info["winner"] = "B"
             info["termination"] = "time_limit"
-            for i in self.team_A:
-                reward[i] -= 0.5
+
+            hp_A = self.hp[self.team_A].sum()
+            hp_B = self.hp[self.team_B].sum()
+
+            if hp_A > hp_B:
+                info["winner"] = "A"
+            elif hp_B > hp_A:
+                info["winner"] = "B"
+            else:
+                info["winner"] = "draw"
 
         if self.enable_logging:
             self._traj["state"].append(self.s.copy())
@@ -252,7 +268,12 @@ class Dogfight2v2_3DOF:
 
         if done and self.enable_logging:
             os.makedirs(self.log_dir, exist_ok=True)
-            path = os.path.join(self.log_dir, f"episode_{self.episode_id:05d}.npz")
+            winner = info.get("winner", "UNK")
+            path = os.path.join(
+                self.log_dir,
+                f"episode_{self.episode_tag}_{winner}.npz"
+            )
+
             np.savez_compressed(
                 path,
                 state=np.array(self._traj["state"]),
@@ -262,4 +283,16 @@ class Dogfight2v2_3DOF:
                 ammo=np.array(self._traj["ammo"]),
             )
 
+        # >>> ADD: eval metrics
+        if len(dists) > 0:
+            info["min_dist"] = float(np.min(dists))
+            info["avg_dist"] = float(np.mean(dists))
+        else:
+            info["min_dist"] = None
+            info["avg_dist"] = None
+
+        info["ammo_A"] = int(self.ammo[self.team_A].sum())
+        info["ammo_B"] = int(self.ammo[self.team_B].sum())
+
         return self._obs_all(), reward, done, info
+

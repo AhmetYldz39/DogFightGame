@@ -15,7 +15,7 @@ class HeuristicBot3DOF:
         self.fire_aoff = np.deg2rad(20)
 
     def act(self, obs: np.ndarray) -> np.ndarray:
-        enemy0 = obs[5 + 6 : 5 + 12]
+        enemy0 = obs[5 + 6: 5 + 12]
 
         R = 4000.0 * np.clip(enemy0[0], 0.0, 1.0)
         brg = np.arctan2(enemy0[1], enemy0[2])

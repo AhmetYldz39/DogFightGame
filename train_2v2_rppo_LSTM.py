@@ -1,6 +1,5 @@
 import os
-import numpy as np
-import glob
+import json
 
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
@@ -9,101 +8,115 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 from scenarios.scenario_2v2.dogfight_env_2v2_3dof import Dogfight2v2_3DOF
 from scenarios.scenario_2v2.dogfight_wrappers_2v2_3dof import Dogfight2v2SB3Wrapper
 
-from tools.replay_animate_2v2_3dof import animate_replay
-from tools.select_best_episode import select_best_episode
 
-
-RUN_NAME = "rppo_2v2_3dof_heuristic_v2"
-LOG_DIR = os.path.join("runs", RUN_NAME)
-os.makedirs(LOG_DIR, exist_ok=True)
+# ======================================================
+# CONFIG
+# ======================================================
+RUN_NAME = "rppo_2v2_final_reward_v1"
+RUN_DIR = os.path.join("runs/runs_2v2", RUN_NAME)
+os.makedirs(RUN_DIR, exist_ok=True)
 
 SEED = 42
 N_ENVS = 8
-TOTAL_STEPS = 1_000_000
+TOTAL_STEPS = 300_000
+
+# Fine-tune opsiyonu
+FINE_TUNE = False
+BASE_RUN = "rppo_2v2_prev_run"  # FINE_TUNE=True ise kullanılır
 
 
-def make_env(seed_offset):
+# ======================================================
+# ENV FACTORY (TRAIN)
+# ======================================================
+def make_env(rank):
     def _init():
-        env = Dogfight2v2_3DOF(seed=SEED + seed_offset)
-        env.enable_logging = True
-        env.log_dir = os.path.join(LOG_DIR, "replays", f"env_{seed_offset}")
+        env = Dogfight2v2_3DOF(seed=SEED + rank)
+        env.enable_logging = False            # TRAIN'DE REPLAY YOK
         env = Dogfight2v2SB3Wrapper(env)
         return env
     return _init
 
 
 vec_env = DummyVecEnv([make_env(i) for i in range(N_ENVS)])
-vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
-model = RecurrentPPO(
-    "MlpLstmPolicy",
-    vec_env,
-    n_steps=256,
-    batch_size=512,
-    learning_rate=3e-4,
-    gamma=0.99,
-    gae_lambda=0.95,
-    ent_coef=0.01,
-    verbose=1,
-    tensorboard_log=LOG_DIR,
-    seed=SEED,
-)
+# ------------------------------------------------------
+# VecNormalize
+# ------------------------------------------------------
+if FINE_TUNE:
+    vec_env = VecNormalize.load(
+        os.path.join("runs", BASE_RUN, "vecnormalize.pkl"),
+        vec_env
+    )
+else:
+    vec_env = VecNormalize(
+        vec_env,
+        norm_obs=True,
+        norm_reward=True,
+        clip_obs=10.0
+    )
 
+
+# ======================================================
+# MODEL
+# ======================================================
+if FINE_TUNE:
+    model = RecurrentPPO.load(
+        os.path.join("runs", BASE_RUN, "final_model.zip"),
+        env=vec_env
+    )
+else:
+    model = RecurrentPPO(
+        "MlpLstmPolicy",
+        vec_env,
+        n_steps=256,
+        batch_size=512,
+        learning_rate=3e-4,
+        gamma=0.99,
+        gae_lambda=0.95,
+        ent_coef=0.01,
+        verbose=1,
+        tensorboard_log=RUN_DIR,
+        seed=SEED,
+    )
+
+
+# ======================================================
+# CALLBACK
+# ======================================================
 checkpoint_cb = CheckpointCallback(
     save_freq=200_000 // N_ENVS,
-    save_path=LOG_DIR,
-    name_prefix="rppo_2v2",
+    save_path=RUN_DIR,
+    name_prefix="ckpt",
     save_vecnormalize=True,
 )
 
+
+# ======================================================
+# TRAIN
+# ======================================================
 model.learn(
     total_timesteps=TOTAL_STEPS,
     callback=checkpoint_cb,
+    reset_num_timesteps=not FINE_TUNE,
     progress_bar=True,
 )
 
-model.save(os.path.join(LOG_DIR, "final_model.zip"))
-vec_env.save(os.path.join(LOG_DIR, "vecnormalize.pkl"))
+model.save(os.path.join(RUN_DIR, "final_model.zip"))
+vec_env.save(os.path.join(RUN_DIR, "vecnormalize.pkl"))
 
-# ---------------- EVAL (DETERMINISTIC) ----------------
-print("Running deterministic eval...")
 
-eval_env = Dogfight2v2_3DOF(seed=999)
-eval_env.enable_logging = True
-eval_env.log_dir = os.path.join(LOG_DIR, "eval_replays")
-eval_env = Dogfight2v2SB3Wrapper(eval_env)
+# ======================================================
+# RUN METADATA (çok önemli)
+# ======================================================
+run_info = {
+    "run_name": RUN_NAME,
+    "reward_shaping": "distance + WEZ + fire + time penalty",
+    "fine_tune": FINE_TUNE,
+    "total_steps": TOTAL_STEPS,
+    "n_envs": N_ENVS,
+}
 
-eval_vec = VecNormalize.load(
-    os.path.join(LOG_DIR, "vecnormalize.pkl"),
-    eval_env
-)
-eval_vec.training = False
-eval_vec.norm_reward = False
+with open(os.path.join(RUN_DIR, "run_info.json"), "w") as f:
+    json.dump(run_info, f, indent=2)
 
-obs, _ = eval_vec.reset()
-done = False
-lstm_state = None
-episode_start = np.ones((1,), dtype=bool)
-
-while not done:
-    action, lstm_state = model.predict(
-        obs,
-        state=lstm_state,
-        episode_start=episode_start,
-        deterministic=True,
-    )
-    obs, _, done, _, info = eval_vec.step(action)
-    episode_start = np.array([done], dtype=bool)
-
-print("Eval finished:", info)
-
-# --------------- BEST EPISODE & VIDEO -----------------
-best = select_best_episode(os.path.join(LOG_DIR, "eval_replays"))
-if best:
-    animate_replay(
-        best,
-        save_path=best.replace(".npz", "_BEST.mp4"),
-        fps=30,
-    )
-else:
-    print("No winning eval episode found.")
+print("TRAIN FINISHED:", RUN_NAME)
