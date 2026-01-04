@@ -12,7 +12,7 @@ from sb3_contrib import RecurrentPPO
 from sb3_contrib.ppo_recurrent import MlpLstmPolicy
 
 from scenarios.scenario_1v1.dogfight_wrappers import DogfightSoloEnvPool
-from replay.replay_recorder import render_eval_episode
+from tools.replay_recorder import render_eval_episode
 
 
 # -------------------------------------------------------
@@ -37,7 +37,7 @@ ENTROPY_SCHEDULE = [(0, 0.02), (250_000, 0.015), (500_000, 0.01), (800_000, 0.00
 # -------------------
 # EXPERT OPPONENT (frozen)
 # -------------------
-EXPERT_RUN_DIR = r"runs\rppo_sepLSTM_heur_20251206_234439"
+EXPERT_RUN_DIR = r"runs\runs_1v1\rppo_sepLSTM_heur_20251206_234439"
 EXPERT_MODEL_PATH = os.path.join(EXPERT_RUN_DIR, "fine_tune_model_v3.zip")
 EXPERT_VEC_PATH = os.path.join(EXPERT_RUN_DIR, "vecnormalize.pkl")
 
@@ -166,7 +166,7 @@ if __name__ == "__main__":
         # Eğer bu scripti ilk kez expert'e karşı koşacaksan:
         # - LOAD_PRESENT_MODEL=False ile yeni model eğit,
         # - ya da mevcut iyi modelini buraya path ver.
-        LOAD_FROM = r"runs\rppo_sepLSTM_heur_20251206_234439\fine_tune_model_v3.zip"
+        LOAD_FROM = EXPERT_MODEL_PATH
         print(f"[FINE-TUNE] Loading model from: {LOAD_FROM}")
         model = RecurrentPPO.load(LOAD_FROM, env=train_vecnorm)
 
