@@ -52,9 +52,9 @@ class Dogfight2v2_3DOF:
 
         # ---- Reward ----
         self.track_w = 0.02
-        self.shot_w = 0.01
-        self.kill_w = 1.0
-        self.bad_shot_w = 0.01
+        self.shot_w = 0.05
+        self.kill_w = 1.5
+        self.bad_shot_w = 0.05
 
         # ---- Opponent ----
         self.heuristic_bot = HeuristicBot3DOF()
@@ -206,20 +206,42 @@ class Dogfight2v2_3DOF:
                 if self.hp[j] <= 0:
                     continue
 
-                R, brg, _, _ = self._rel_geom(i, j)
-                dists.append(R)
-                lead_err = self._lead_error(i, j)
+                # teammate distance penalty / reward
+                teammate = [k for k in self.team_A if k != i][0]
+                R_tm, _, _, _ = self._rel_geom(i, teammate)
 
+                # penalty if far away
+                if R_tm > 3000:
+                    reward[i] -= 0.05
+
+                # ideal wingman distance
+                reward[i] += 0.03 * np.exp(-abs(R_tm - 1500) / 800)
+
+                # penalty of running away from enemy
+                R, brg, _, _ = self._rel_geom(i, j)
+                reward[i] += -0.0005 * R
+                dists.append(R)
+
+                # disengagement penalty
+                if R > 5000:
+                    reward[i] -= 0.03
+
+                # reward for getting closer to enemy
+                reward[i] += 0.4 * np.exp(-R / 1500.0)
+
+                # orientation
+                lead_err = self._lead_error(i, j)
+                lead_ok = lead_err < self.lead_gate
+
+                # weapon engagement zone reward
                 inside_wez = (R < self.wez_R) and (abs(brg) < self.wez_ang)
                 if inside_wez:
                     reward[i] += 0.1
 
-                lead_ok = lead_err < self.lead_gate
-
+                # tracking reward
                 reward[i] += self.track_w * np.cos(lead_err)
-                reward[i] += -0.0005 * R
-                reward[i] += 0.4 * np.exp(-R / 1500.0)
 
+                # fire action prediction
                 fire_p = actions[i][3]
                 fire_cmd = (
                     fire_p > 0.5
@@ -228,10 +250,11 @@ class Dogfight2v2_3DOF:
                     and self.ammo[i] > 0
                 )
 
+                # fire action reward mechanism
                 if fire_cmd:
                     self.ammo[i] -= 1
                     self.fire_cd[i] = self.fire_cd_steps
-                    reward[i] += 0.02
+                    reward[i] -= 0.01
 
                     if lead_ok:
                         pk = self.base_pk * np.exp(-(lead_err / self.lead_gate) ** 2)
@@ -258,6 +281,11 @@ class Dogfight2v2_3DOF:
                 info["winner"] = "B"
             else:
                 info["winner"] = "draw"
+
+            # penalty for draw
+            if info["winner"] == "draw":
+                for i in self.team_A:
+                    reward[i] -= 0.5
 
         if self.enable_logging:
             self._traj["state"].append(self.s.copy())

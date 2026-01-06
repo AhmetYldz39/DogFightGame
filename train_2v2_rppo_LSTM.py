@@ -12,14 +12,14 @@ from scenarios.scenario_2v2.dogfight_wrappers_2v2_3dof import Dogfight2v2SB3Wrap
 # ======================================================
 # CONFIG
 # ======================================================
-RUN_NAME = "rppo_2v2_final_reward_v2"
+RUN_NAME = "rppo_2v2_final_reward_v3"
 RUN_DIR = os.path.join("runs/runs_2v2", RUN_NAME)
 os.makedirs(RUN_DIR, exist_ok=True)
 
 SEED = 42
 N_ENVS = 8
-TOTAL_STEPS = [150_000, 100_000, 50_000]  # -> for each phase
-ENT_COEF = 0.02
+TOTAL_STEPS = 200_000  # -> for each phase
+ENT_COEF = 0.015
 
 # Fine-tune opsiyonu
 FINE_TUNE = False
@@ -99,14 +99,13 @@ checkpoint_cb = CheckpointCallback(
 
 # Phase 1 – Exploration
 model.learn(
-    total_timesteps=TOTAL_STEPS[0],
+    total_timesteps=TOTAL_STEPS,
     callback=checkpoint_cb,
     reset_num_timesteps=not FINE_TUNE,
     progress_bar=True,
 )
-print("Entropy set to 0.02 → 0.01")
 
-# Phase 2 – Transition
+"""# Phase 2 – Transition
 model.ent_coef = 0.01
 model.learn(
     total_timesteps=TOTAL_STEPS[1],
@@ -123,7 +122,7 @@ model.learn(
     callback=checkpoint_cb,
     reset_num_timesteps=False,
     progress_bar=True,
-)
+)"""
 
 
 model.save(os.path.join(RUN_DIR, "final_model.zip"))

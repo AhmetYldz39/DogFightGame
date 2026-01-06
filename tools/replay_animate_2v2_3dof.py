@@ -1,6 +1,13 @@
+import matplotlib as mpl
+import imageio_ffmpeg
+
+mpl.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
+mpl.use("Agg")
+
+
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
+from matplotlib.animation import FuncAnimation, FFMpegWriter
 import math
 
 
@@ -111,6 +118,14 @@ def animate_replay(
     )
 
     if save_path:
-        anim.save(save_path, fps=fps)
+        writer = FFMpegWriter(
+            fps=fps,
+            codec="libx264",
+            extra_args=[
+                "-pix_fmt", "yuv420p",  # KRİTİK SATIR
+                "-profile:v", "baseline"
+            ]
+        )
+        anim.save(save_path, writer=writer)
 
-    plt.show()
+    plt.close(fig)
