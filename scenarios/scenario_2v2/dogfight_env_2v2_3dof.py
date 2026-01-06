@@ -20,7 +20,7 @@ class Dogfight2v2_3DOF:
         self.gamma_max = np.deg2rad(45)
 
         # ---- Episode control ----
-        self.max_steps = 3000  # <<< TIME LIMIT (kritik)
+        self.max_steps = 1500  # <<< TIME LIMIT (kritik)
 
         # ---- Teams ----
         self.n_agents = 4
@@ -202,7 +202,7 @@ class Dogfight2v2_3DOF:
 
         for i in self.team_A:
             for j in self.team_B:
-                reward[i] -= 0.003  # time penalty
+                reward[i] -= 0.005  # time penalty
                 if self.hp[j] <= 0:
                     continue
 
@@ -212,13 +212,13 @@ class Dogfight2v2_3DOF:
 
                 inside_wez = (R < self.wez_R) and (abs(brg) < self.wez_ang)
                 if inside_wez:
-                    reward[i] += 0.05
+                    reward[i] += 0.1
 
                 lead_ok = lead_err < self.lead_gate
 
                 reward[i] += self.track_w * np.cos(lead_err)
-                reward[i] += -0.0001 * R
-                reward[i] += 0.15 * np.exp(-R / 2000.0)
+                reward[i] += -0.0005 * R
+                reward[i] += 0.4 * np.exp(-R / 1500.0)
 
                 fire_p = actions[i][3]
                 fire_cmd = (

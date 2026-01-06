@@ -13,14 +13,14 @@ from tools.plot_eval_summary import plot_eval_summary
 # ======================================================
 # CONFIG
 # ======================================================
-RUN_NAME = "rppo_2v2_final_reward_v1"
+RUN_NAME = "rppo_2v2_final_reward_v2"
 RUN_DIR = os.path.join("runs/runs_2v2", RUN_NAME)
 
 EVAL_DIR = os.path.join(RUN_DIR, "eval")
 REPLAY_DIR = os.path.join(EVAL_DIR, "replays")
 os.makedirs(REPLAY_DIR, exist_ok=True)
 
-N_EVAL_EPISODES = 5
+N_EVAL_EPISODES = 25
 SEED_START = 1000
 
 

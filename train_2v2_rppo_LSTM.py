@@ -12,13 +12,14 @@ from scenarios.scenario_2v2.dogfight_wrappers_2v2_3dof import Dogfight2v2SB3Wrap
 # ======================================================
 # CONFIG
 # ======================================================
-RUN_NAME = "rppo_2v2_final_reward_v1"
+RUN_NAME = "rppo_2v2_final_reward_v2"
 RUN_DIR = os.path.join("runs/runs_2v2", RUN_NAME)
 os.makedirs(RUN_DIR, exist_ok=True)
 
 SEED = 42
 N_ENVS = 8
-TOTAL_STEPS = 300_000
+TOTAL_STEPS = [150_000, 100_000, 50_000]  # -> for each phase
+ENT_COEF = 0.02
 
 # Fine-tune opsiyonu
 FINE_TUNE = False
@@ -38,6 +39,7 @@ def make_env(rank):
 
 
 vec_env = DummyVecEnv([make_env(i) for i in range(N_ENVS)])
+
 
 # ------------------------------------------------------
 # VecNormalize
@@ -73,7 +75,7 @@ else:
         learning_rate=3e-4,
         gamma=0.99,
         gae_lambda=0.95,
-        ent_coef=0.01,
+        ent_coef=ENT_COEF,
         verbose=1,
         tensorboard_log=RUN_DIR,
         seed=SEED,
@@ -91,15 +93,38 @@ checkpoint_cb = CheckpointCallback(
 )
 
 
-# ======================================================
-# TRAIN
-# ======================================================
+# =========================
+# TRAIN – PHASED
+# =========================
+
+# Phase 1 – Exploration
 model.learn(
-    total_timesteps=TOTAL_STEPS,
+    total_timesteps=TOTAL_STEPS[0],
     callback=checkpoint_cb,
     reset_num_timesteps=not FINE_TUNE,
     progress_bar=True,
 )
+print("Entropy set to 0.02 → 0.01")
+
+# Phase 2 – Transition
+model.ent_coef = 0.01
+model.learn(
+    total_timesteps=TOTAL_STEPS[1],
+    callback=checkpoint_cb,
+    reset_num_timesteps=False,   # ÇOK ÖNEMLİ
+    progress_bar=True,
+)
+print("Entropy set to 0.01 → 0.005")
+
+# Phase 3 – Exploitation
+model.ent_coef = 0.005
+model.learn(
+    total_timesteps=TOTAL_STEPS[2],
+    callback=checkpoint_cb,
+    reset_num_timesteps=False,
+    progress_bar=True,
+)
+
 
 model.save(os.path.join(RUN_DIR, "final_model.zip"))
 vec_env.save(os.path.join(RUN_DIR, "vecnormalize.pkl"))

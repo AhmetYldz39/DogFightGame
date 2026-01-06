@@ -1,0 +1,11 @@
+{
+  "run_name": "rppo_2v2_final_reward_v2",
+  "reward_shaping": "distance + WEZ + fire + time penalty",
+  "fine_tune": false,
+  "total_steps": [
+    150000,
+    100000,
+    50000
+  ],
+  "n_envs": 8
+}
