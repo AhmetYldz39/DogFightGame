@@ -20,6 +20,7 @@ def animate_replay(
     states = data["state"]      # (T, 4, 6)
     actions = data["action"]    # (T, {0,1}->{nx,nz,mu,fire})
     hp = data["hp"]             # (T, 4)
+    fire_events = data.get("fire_events", [])
 
     T = states.shape[0]
 
@@ -49,9 +50,6 @@ def animate_replay(
         0: ax.plot([], [], "b--", alpha=0.4)[0],
         1: ax.plot([], [], "b--", alpha=0.4)[0],
     }
-
-    # Fire markers
-    fire_scatter = ax.scatter([], [], s=80, c="orange", marker="*", zorder=5)
 
     # HP text
     hp_text = ax.text(
@@ -97,10 +95,20 @@ def animate_replay(
                 fire_x.append(xs[a_id])
                 fire_y.append(ys[a_id])
 
-        if len(fire_x) > 0:
-            fire_scatter.set_offsets(np.column_stack([fire_x, fire_y]))
-        else:
-            fire_scatter.set_offsets(np.empty((0, 2)))
+
+        # ---- BULLET TRAJECTORIES ----
+        for evt in fire_events:
+            if frame - evt["t"] in [0, 1, 2]:  # 2–3 frame göster
+                x0, y0 = evt["shooter_pos"]
+                x1, y1 = evt["target_pos"]
+
+                ax.plot(
+                    [x0, x1],
+                    [y0, y1],
+                    color="red" if evt["hit"] else "orange",
+                    alpha=0.6,
+                    linewidth=2,
+                )
 
         # HP display
         hp_text.set_text(
@@ -108,7 +116,7 @@ def animate_replay(
             f"HP B0:{hp[frame, 2]:.1f}  B1:{hp[frame, 3]:.1f}"
         )
 
-        return A0, A1, B0, B1, fire_scatter, hp_text
+        return A0, A1, B0, B1, hp_text
 
     anim = FuncAnimation(
         fig, update,

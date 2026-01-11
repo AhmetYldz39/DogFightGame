@@ -5,7 +5,7 @@ from scenarios.scenario_2v2.heuristic_bot_3dof import HeuristicBot3DOF
 
 
 # =========================================================
-# 2v2 3DOF Dogfight Environment
+# 2v2 3DOF Dogfight Environment (FINAL CLEAN VERSION)
 # =========================================================
 class Dogfight2v2_3DOF:
     def __init__(self, dt=0.1, arena=6000.0, seed=0):
@@ -19,24 +19,23 @@ class Dogfight2v2_3DOF:
         self.v_max = 350.0
         self.gamma_max = np.deg2rad(45)
 
-        # ---- Episode control ----
-        self.max_steps = 1500  # <<< TIME LIMIT (kritik)
+        # ---- Episode ----
+        self.max_steps = 1500
 
         # ---- Teams ----
         self.n_agents = 4
         self.team_A = [0, 1]
         self.team_B = [2, 3]
 
-        # ---- Action: [nx, nz, mu, fire] ----
+        # ---- Action: [nx, nz, bank angle, fire] ----
         self.action_space = spaces.Box(
             low=np.array([-1.0, 0.0, -np.deg2rad(60), 0.0], dtype=np.float32),
             high=np.array([1.5, 3.0,  np.deg2rad(60), 1.0], dtype=np.float32),
         )
 
         # ---- Observation ----
-        obs_dim = 23
         self.observation_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32
+            low=-1.0, high=1.0, shape=(23,), dtype=np.float32
         )
 
         # ---- Weapon / WEZ ----
@@ -46,31 +45,28 @@ class Dogfight2v2_3DOF:
         self.bullet_speed = 300.0
         self.base_pk = 0.55
 
-        # ---- Ammo ----
+        # ---- Ammo / Fire ----
         self.initial_ammo = 80
         self.fire_cd_steps = 3
 
         # ---- Reward ----
         self.track_w = 0.02
-        self.shot_w = 0.05
-        self.kill_w = 1.5
-        self.bad_shot_w = 0.05
+        self.kill_w = 10.0
 
         # ---- Opponent ----
         self.heuristic_bot = HeuristicBot3DOF()
 
         # ---- Logging ----
         self.enable_logging = False
-        self.log_dir = "runs/runs_2v2/replays_tmp"
-        #self.episode_id = 0
+        self.log_dir = "runs/runs_2v2/replays"
         self.episode_tag = "ep"
 
         self.reset()
 
-    # -----------------------------------------------------
-
+    # =====================================================
+    # RESET
+    # =====================================================
     def reset(self):
-        #self.episode_id += 1
         self.steps = 0
 
         self.s = np.zeros((self.n_agents, 6), dtype=np.float32)
@@ -84,15 +80,23 @@ class Dogfight2v2_3DOF:
             self.s[i, 4] = self.rng.uniform(-np.pi, np.pi)
             self.s[i, 5] = 0.0
 
-        self.hp = np.ones(self.n_agents, dtype=np.float32)
-        self.ammo = np.full(self.n_agents, self.initial_ammo, dtype=np.int32)
-        self.fire_cd = np.zeros(self.n_agents, dtype=np.int32)
+        self.hp = np.ones(self.n_agents)
+        self.ammo = np.full(self.n_agents, self.initial_ammo)
+        self.fire_cd = np.zeros(self.n_agents, dtype=int)
+        self.wez_timer = np.zeros(len(self.team_A))
 
+        self.fire_events = []
         self._traj = {"state": [], "action": [], "reward": [], "hp": [], "ammo": []}
+
+        self.prev_enemy_dist = {
+            i: {j: None for j in self.team_B} for i in self.team_A
+        }
+
         return self._obs_all()
 
-    # -----------------------------------------------------
-
+    # =====================================================
+    # DYNAMICS
+    # =====================================================
     def _integrate_3dof(self, i, nx, nz, mu):
         x, y, h, V, psi, gamma = self.s[i]
 
@@ -104,17 +108,17 @@ class Dogfight2v2_3DOF:
         dpsi = self.g * nz * np.sin(mu) / max(V * np.cos(gamma), 1e-3)
         dgamma = self.g * (nz * np.cos(mu) - np.cos(gamma)) / max(V, 1e-3)
 
-        x += dx * self.dt
-        y += dy * self.dt
-        h += dh * self.dt
-        V = np.clip(V + dV * self.dt, self.v_min, self.v_max)
-        psi = (psi + dpsi * self.dt + np.pi) % (2 * np.pi) - np.pi
-        gamma = np.clip(gamma + dgamma * self.dt, -self.gamma_max, self.gamma_max)
+        self.s[i, 0] += dx * self.dt
+        self.s[i, 1] += dy * self.dt
+        self.s[i, 2] += dh * self.dt
+        self.s[i, 3] = np.clip(V + dV * self.dt, self.v_min, self.v_max)
+        self.s[i, 4] = (psi + dpsi * self.dt + np.pi) % (2*np.pi) - np.pi
+        self.s[i, 5] = np.clip(gamma + dgamma * self.dt,
+                                -self.gamma_max, self.gamma_max)
 
-        self.s[i] = [x, y, h, V, psi, gamma]
-
-    # -----------------------------------------------------
-
+    # =====================================================
+    # GEOMETRY
+    # =====================================================
     def _rel_geom(self, i, j):
         dx = self.s[j, 0] - self.s[i, 0]
         dy = self.s[j, 1] - self.s[i, 1]
@@ -123,12 +127,12 @@ class Dogfight2v2_3DOF:
         psi_i = self.s[i, 4]
         psi_j = self.s[j, 4]
 
-        brg = (np.arctan2(dy, dx) - psi_i + np.pi) % (2 * np.pi) - np.pi
-        aoff = (psi_j - psi_i + np.pi) % (2 * np.pi) - np.pi
+        brg = (np.arctan2(dy, dx) - psi_i + np.pi) % (2*np.pi) - np.pi
+        aoff = (psi_j - psi_i + np.pi) % (2*np.pi) - np.pi
 
         vij = self.s[j, 3] * np.array([np.cos(psi_j), np.sin(psi_j)])
         vii = self.s[i, 3] * np.array([np.cos(psi_i), np.sin(psi_i)])
-        clos = -(dx * (vij[0] - vii[0]) + dy * (vij[1] - vii[1])) / (R + 1e-6)
+        clos = -(dx*(vij[0]-vii[0]) + dy*(vij[1]-vii[1])) / (R+1e-6)
 
         return R, brg, aoff, clos
 
@@ -140,152 +144,145 @@ class Dogfight2v2_3DOF:
         vj = self.s[j, 3]
 
         R = np.hypot(dx, dy)
-        t_hit = R / (self.bullet_speed + 1e-6)
+        t = R / (self.bullet_speed + 1e-6)
 
-        lead_x = dx + vj * np.cos(psi_j) * t_hit
-        lead_y = dy + vj * np.sin(psi_j) * t_hit
-        lead_brg = (np.arctan2(lead_y, lead_x) - psi_i + np.pi) % (2 * np.pi) - np.pi
-        return abs(lead_brg)
+        lead_x = dx + vj*np.cos(psi_j)*t
+        lead_y = dy + vj*np.sin(psi_j)*t
+        brg = (np.arctan2(lead_y, lead_x) - psi_i + np.pi) % (2*np.pi) - np.pi
+        return abs(brg)
 
-    # -----------------------------------------------------
-
+    # =====================================================
+    # OBSERVATIONS
+    # =====================================================
     def _obs_agent(self, i):
         obs = []
-        V = self.s[i, 3]
-        psi = self.s[i, 4]
-        gamma = self.s[i, 5]
+        V, psi, gamma = self.s[i, 3], self.s[i, 4], self.s[i, 5]
 
         obs.extend([
-            (V - self.v_min) / (self.v_max - self.v_min),
+            (V-self.v_min)/(self.v_max-self.v_min),
             np.sin(psi), np.cos(psi),
             np.sin(gamma), np.cos(gamma),
         ])
 
-        teammates = [j for j in self.team_A if j != i]
+        teammates = [k for k in self.team_A if k != i]
         enemies = self.team_B
 
         for j in teammates + enemies:
             R, brg, aoff, clos = self._rel_geom(i, j)
             obs.extend([
-                np.clip(R / 4000.0, 0.0, 1.0),
+                np.clip(R/4000.0, 0, 1),
                 np.sin(brg), np.cos(brg),
                 np.sin(aoff), np.cos(aoff),
-                np.tanh(clos / 200.0),
+                np.tanh(clos/200.0)
             ])
 
-        return np.clip(np.array(obs, dtype=np.float32), -1.0, 1.0)
+        return np.clip(np.array(obs, dtype=np.float32), -1, 1)
 
     def _obs_all(self):
         return {i: self._obs_agent(i) for i in self.team_A}
 
-    # -----------------------------------------------------
+    # =====================================================
+    # FIRE LOGIC
+    # =====================================================
+    def _handle_fire(self, shooter, target, reward=None):
+        if self.hp[shooter] <= 0 or self.hp[target] <= 0:
+            return False
+        if self.fire_cd[shooter] > 0 or self.ammo[shooter] <= 0:
+            return False
 
+        R, brg, aoff, _ = self._rel_geom(shooter, target)
+        inside_wez = (R < self.wez_R and abs(brg) < self.wez_ang and abs(aoff) < self.wez_ang)
+        if not inside_wez:
+            return False
+
+        self.ammo[shooter] -= 1
+        self.fire_cd[shooter] = self.fire_cd_steps
+
+        pk = self.base_pk * np.exp(-(aoff/self.lead_gate)**2)
+        hit = self.rng.random() < np.clip(pk, 0.1, 0.9)
+
+        if hit:
+            self.hp[target] -= 1.0
+
+        self.fire_events.append({
+            "t": self.steps,
+            "shooter": shooter,
+            "target": target,
+            "hit": hit,
+            "shooter_pos": self.s[shooter,:2].copy(),
+            "target_pos": self.s[target,:2].copy()
+        })
+
+        if reward is not None:
+            reward[shooter] -= 0.002
+            if hit:
+                reward[shooter] += self.kill_w
+                for tm in self.team_A:
+                    if tm != shooter:
+                        reward[tm] += 0.5
+
+        return self.hp[target] <= 0
+
+    # =====================================================
+    # STEP
+    # =====================================================
     def step(self, actions):
         self.steps += 1
         reward = {i: 0.0 for i in self.team_A}
-        done = False
-        info = {}
+        done, info = False, {}
         dists = []
 
-        for i in range(self.n_agents):
-            if self.fire_cd[i] > 0:
-                self.fire_cd[i] -= 1
+        self.fire_cd = np.maximum(self.fire_cd-1, 0)
 
+        # TEAM A
         for i in self.team_A:
-            nx, nz, mu, _ = actions[i]
+            if self.hp[i] <= 0:
+                continue
+            nx, nz, mu, fire = actions[i]
             self._integrate_3dof(i, nx, nz, mu)
+            if fire > 0.5:
+                for j in self.team_B:
+                    if self._handle_fire(i, j, reward):
+                        done, info = True, {"winner":"A","termination":"kill"}
 
-        for i in self.team_B:
-            obs_i = self._obs_agent(i)
-            nx, nz, mu, _ = self.heuristic_bot.act(obs_i)
-            self._integrate_3dof(i, nx, nz, mu)
+        # TEAM B
+        for j in self.team_B:
+            if self.hp[j] <= 0:
+                continue
+            obs_j = self._obs_agent(j)
+            nx, nz, mu, fire = self.heuristic_bot.act(obs_j)
+            self._integrate_3dof(j, nx, nz, mu)
+            if fire > 0.5:
+                for i in self.team_A:
+                    if self._handle_fire(j, i):
+                        done, info = True, {"winner":"B","termination":"kill"}
 
+        # REWARD SHAPING
         for i in self.team_A:
+            if self.hp[i] <= 0:
+                continue
+            tm = [k for k in self.team_A if k!=i][0]
+            Rtm, _, _, _ = self._rel_geom(i, tm)
+            reward[i] += 0.03*np.exp(-abs(Rtm - 1500)/800)
+
             for j in self.team_B:
-                reward[i] -= 0.005  # time penalty
                 if self.hp[j] <= 0:
                     continue
-
-                # teammate distance penalty / reward
-                teammate = [k for k in self.team_A if k != i][0]
-                R_tm, _, _, _ = self._rel_geom(i, teammate)
-
-                # penalty if far away
-                if R_tm > 3000:
-                    reward[i] -= 0.05
-
-                # ideal wingman distance
-                reward[i] += 0.03 * np.exp(-abs(R_tm - 1500) / 800)
-
-                # penalty of running away from enemy
-                R, brg, _, _ = self._rel_geom(i, j)
-                reward[i] += -0.0005 * R
+                R, brg, _, _ = self._rel_geom(i,j)
                 dists.append(R)
+                reward[i] += 0.4*np.exp(-R/1500)
+                prev = self.prev_enemy_dist[i][j]
+                if prev is not None:
+                    reward[i] += np.clip(0.003 * (prev-R), -0.05, 0.05)
+                self.prev_enemy_dist[i][j]=R
+                reward[i] += self.track_w*np.cos(self._lead_error(i, j))
 
-                # disengagement penalty
-                if R > 5000:
-                    reward[i] -= 0.03
-
-                # reward for getting closer to enemy
-                reward[i] += 0.4 * np.exp(-R / 1500.0)
-
-                # orientation
-                lead_err = self._lead_error(i, j)
-                lead_ok = lead_err < self.lead_gate
-
-                # weapon engagement zone reward
-                inside_wez = (R < self.wez_R) and (abs(brg) < self.wez_ang)
-                if inside_wez:
-                    reward[i] += 0.1
-
-                # tracking reward
-                reward[i] += self.track_w * np.cos(lead_err)
-
-                # fire action prediction
-                fire_p = actions[i][3]
-                fire_cmd = (
-                    fire_p > 0.5
-                    and inside_wez
-                    and self.fire_cd[i] == 0
-                    and self.ammo[i] > 0
-                )
-
-                # fire action reward mechanism
-                if fire_cmd:
-                    self.ammo[i] -= 1
-                    self.fire_cd[i] = self.fire_cd_steps
-                    reward[i] -= 0.01
-
-                    if lead_ok:
-                        pk = self.base_pk * np.exp(-(lead_err / self.lead_gate) ** 2)
-                        pk = float(np.clip(pk, 0.1, 0.9))
-                        reward[i] += self.shot_w
-
-                        if self.rng.random() < pk:
-                            self.hp[j] -= 1.0
-                            reward[i] += self.kill_w
-                    else:
-                        reward[i] -= self.bad_shot_w
-
-        # ---------- TIME LIMIT TERMINATION ----------
-        if self.steps >= self.max_steps and not done:
+        # TIME LIMIT
+        if self.steps>=self.max_steps and not done:
             done = True
-            info["termination"] = "time_limit"
-
-            hp_A = self.hp[self.team_A].sum()
-            hp_B = self.hp[self.team_B].sum()
-
-            if hp_A > hp_B:
-                info["winner"] = "A"
-            elif hp_B > hp_A:
-                info["winner"] = "B"
-            else:
-                info["winner"] = "draw"
-
-            # penalty for draw
-            if info["winner"] == "draw":
-                for i in self.team_A:
-                    reward[i] -= 0.5
+            info["termination"]="time_limit"
+            hpA,hpB = self.hp[self.team_A].sum(),self.hp[self.team_B].sum()
+            info["winner"] = "A" if hpA>hpB else "B" if hpB > hpA else "draw"
 
         if self.enable_logging:
             self._traj["state"].append(self.s.copy())
@@ -295,32 +292,19 @@ class Dogfight2v2_3DOF:
             self._traj["ammo"].append(self.ammo.copy())
 
         if done and self.enable_logging:
-            os.makedirs(self.log_dir, exist_ok=True)
-            winner = info.get("winner", "UNK")
-            path = os.path.join(
-                self.log_dir,
-                f"episode_{self.episode_tag}_{winner}.npz"
-            )
-
+            os.makedirs(self.log_dir,exist_ok=True)
             np.savez_compressed(
-                path,
+                os.path.join(self.log_dir,f"episode_{self.episode_tag}_{info.get('winner','X')}.npz"),
                 state=np.array(self._traj["state"]),
                 action=np.array(self._traj["action"]),
                 reward=np.array(self._traj["reward"]),
                 hp=np.array(self._traj["hp"]),
                 ammo=np.array(self._traj["ammo"]),
+                fire_events=np.array(self.fire_events,dtype=object)
             )
 
-        # >>> ADD: eval metrics
-        if len(dists) > 0:
+        if dists:
             info["min_dist"] = float(np.min(dists))
             info["avg_dist"] = float(np.mean(dists))
-        else:
-            info["min_dist"] = None
-            info["avg_dist"] = None
-
-        info["ammo_A"] = int(self.ammo[self.team_A].sum())
-        info["ammo_B"] = int(self.ammo[self.team_B].sum())
 
         return self._obs_all(), reward, done, info
-

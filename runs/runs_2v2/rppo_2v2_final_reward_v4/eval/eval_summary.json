@@ -1,0 +1,452 @@
+[
+  {
+    "episode": 0,
+    "seed": 1000,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 3466.67236328125,
+    "avg_dist": 17932.4765625,
+    "episode_len": 1500
+  },
+  {
+    "episode": 1,
+    "seed": 1001,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 12667.181640625,
+    "avg_dist": 19219.62890625,
+    "episode_len": 1500
+  },
+  {
+    "episode": 2,
+    "seed": 1002,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 18570.30859375,
+    "avg_dist": 20424.19140625,
+    "episode_len": 1500
+  },
+  {
+    "episode": 3,
+    "seed": 1003,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 1124.5548095703125,
+    "avg_dist": 17031.88671875,
+    "episode_len": 1500
+  },
+  {
+    "episode": 4,
+    "seed": 1004,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 419.06695556640625,
+    "avg_dist": 13452.4619140625,
+    "episode_len": 1500
+  },
+  {
+    "episode": 5,
+    "seed": 1005,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 15656.365234375,
+    "avg_dist": 19782.51953125,
+    "episode_len": 1500
+  },
+  {
+    "episode": 6,
+    "seed": 1006,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 4675.73193359375,
+    "avg_dist": 19812.94140625,
+    "episode_len": 1500
+  },
+  {
+    "episode": 7,
+    "seed": 1007,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 2835.26171875,
+    "avg_dist": 16908.90234375,
+    "episode_len": 1500
+  },
+  {
+    "episode": 8,
+    "seed": 1008,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 957.168701171875,
+    "avg_dist": 11642.9697265625,
+    "episode_len": 1500
+  },
+  {
+    "episode": 9,
+    "seed": 1009,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 1944.97119140625,
+    "avg_dist": 18319.96875,
+    "episode_len": 1500
+  },
+  {
+    "episode": 10,
+    "seed": 1010,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 6529.646484375,
+    "avg_dist": 15283.787109375,
+    "episode_len": 1500
+  },
+  {
+    "episode": 11,
+    "seed": 1011,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 5567.16748046875,
+    "avg_dist": 12953.201171875,
+    "episode_len": 1500
+  },
+  {
+    "episode": 12,
+    "seed": 1012,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 1006.5684814453125,
+    "avg_dist": 16677.376953125,
+    "episode_len": 1500
+  },
+  {
+    "episode": 13,
+    "seed": 1013,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 7228.26025390625,
+    "avg_dist": 16048.3515625,
+    "episode_len": 1500
+  },
+  {
+    "episode": 14,
+    "seed": 1014,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 640.17236328125,
+    "avg_dist": 21687.271484375,
+    "episode_len": 1500
+  },
+  {
+    "episode": 15,
+    "seed": 1015,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 1221.71630859375,
+    "avg_dist": 19669.685546875,
+    "episode_len": 1500
+  },
+  {
+    "episode": 16,
+    "seed": 1016,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 21606.869140625,
+    "avg_dist": 23934.40625,
+    "episode_len": 1500
+  },
+  {
+    "episode": 17,
+    "seed": 1017,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 6643.85595703125,
+    "avg_dist": 16079.833984375,
+    "episode_len": 1500
+  },
+  {
+    "episode": 18,
+    "seed": 1018,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 5906.10302734375,
+    "avg_dist": 17312.232421875,
+    "episode_len": 1500
+  },
+  {
+    "episode": 19,
+    "seed": 1019,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 4717.8212890625,
+    "avg_dist": 24346.236328125,
+    "episode_len": 1500
+  },
+  {
+    "episode": 20,
+    "seed": 1020,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 13718.1201171875,
+    "avg_dist": 21416.083984375,
+    "episode_len": 1500
+  },
+  {
+    "episode": 21,
+    "seed": 1021,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 5262.072265625,
+    "avg_dist": 20238.953125,
+    "episode_len": 1500
+  },
+  {
+    "episode": 22,
+    "seed": 1022,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 1017.4832153320312,
+    "avg_dist": 22078.408203125,
+    "episode_len": 1500
+  },
+  {
+    "episode": 23,
+    "seed": 1023,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 18987.775390625,
+    "avg_dist": 21520.61328125,
+    "episode_len": 1500
+  },
+  {
+    "episode": 24,
+    "seed": 1024,
+    "winner": "A",
+    "termination": "kill",
+    "min_dist": 297.6196594238281,
+    "avg_dist": 1936.8115234375,
+    "episode_len": 9
+  },
+  {
+    "episode": 25,
+    "seed": 1025,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 2846.70068359375,
+    "avg_dist": 18305.1796875,
+    "episode_len": 1500
+  },
+  {
+    "episode": 26,
+    "seed": 1026,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 23354.453125,
+    "avg_dist": 24574.125,
+    "episode_len": 1500
+  },
+  {
+    "episode": 27,
+    "seed": 1027,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 14278.1123046875,
+    "avg_dist": 19199.90234375,
+    "episode_len": 1500
+  },
+  {
+    "episode": 28,
+    "seed": 1028,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 3992.283203125,
+    "avg_dist": 25984.765625,
+    "episode_len": 1500
+  },
+  {
+    "episode": 29,
+    "seed": 1029,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 904.5237426757812,
+    "avg_dist": 21948.572265625,
+    "episode_len": 1500
+  },
+  {
+    "episode": 30,
+    "seed": 1030,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 3377.79541015625,
+    "avg_dist": 26742.71484375,
+    "episode_len": 1500
+  },
+  {
+    "episode": 31,
+    "seed": 1031,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 17042.830078125,
+    "avg_dist": 19891.23046875,
+    "episode_len": 1500
+  },
+  {
+    "episode": 32,
+    "seed": 1032,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 5157.4521484375,
+    "avg_dist": 14325.794921875,
+    "episode_len": 1500
+  },
+  {
+    "episode": 33,
+    "seed": 1033,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 976.2103881835938,
+    "avg_dist": 21159.6484375,
+    "episode_len": 1500
+  },
+  {
+    "episode": 34,
+    "seed": 1034,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 17249.630859375,
+    "avg_dist": 19735.8125,
+    "episode_len": 1500
+  },
+  {
+    "episode": 35,
+    "seed": 1035,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 19459.23828125,
+    "avg_dist": 22561.380859375,
+    "episode_len": 1500
+  },
+  {
+    "episode": 36,
+    "seed": 1036,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 401.52398681640625,
+    "avg_dist": 17760.826171875,
+    "episode_len": 1500
+  },
+  {
+    "episode": 37,
+    "seed": 1037,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 18516.390625,
+    "avg_dist": 22661.357421875,
+    "episode_len": 1500
+  },
+  {
+    "episode": 38,
+    "seed": 1038,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 193.924560546875,
+    "avg_dist": 24486.658203125,
+    "episode_len": 1500
+  },
+  {
+    "episode": 39,
+    "seed": 1039,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 4666.44677734375,
+    "avg_dist": 24305.482421875,
+    "episode_len": 1500
+  },
+  {
+    "episode": 40,
+    "seed": 1040,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 1073.1522216796875,
+    "avg_dist": 18683.484375,
+    "episode_len": 1500
+  },
+  {
+    "episode": 41,
+    "seed": 1041,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 1646.8681640625,
+    "avg_dist": 13845.1943359375,
+    "episode_len": 1500
+  },
+  {
+    "episode": 42,
+    "seed": 1042,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 2838.545166015625,
+    "avg_dist": 21483.87890625,
+    "episode_len": 1500
+  },
+  {
+    "episode": 43,
+    "seed": 1043,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 519.7670288085938,
+    "avg_dist": 23479.505859375,
+    "episode_len": 1500
+  },
+  {
+    "episode": 44,
+    "seed": 1044,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 1906.8240966796875,
+    "avg_dist": 22699.212890625,
+    "episode_len": 1500
+  },
+  {
+    "episode": 45,
+    "seed": 1045,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 18893.19140625,
+    "avg_dist": 22001.443359375,
+    "episode_len": 1500
+  },
+  {
+    "episode": 46,
+    "seed": 1046,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 5292.869140625,
+    "avg_dist": 19257.509765625,
+    "episode_len": 1500
+  },
+  {
+    "episode": 47,
+    "seed": 1047,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 1166.086669921875,
+    "avg_dist": 23229.779296875,
+    "episode_len": 1500
+  },
+  {
+    "episode": 48,
+    "seed": 1048,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 3676.1376953125,
+    "avg_dist": 14910.279296875,
+    "episode_len": 1500
+  },
+  {
+    "episode": 49,
+    "seed": 1049,
+    "winner": "draw",
+    "termination": "time_limit",
+    "min_dist": 694.5303955078125,
+    "avg_dist": 23856.341796875,
+    "episode_len": 1500
+  }
+]

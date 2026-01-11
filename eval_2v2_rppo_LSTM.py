@@ -13,14 +13,14 @@ from tools.plot_eval_summary import plot_eval_summary
 # ======================================================
 # CONFIG
 # ======================================================
-RUN_NAME = "rppo_2v2_final_reward_v3"
+RUN_NAME = "rppo_2v2_final_reward_v6"
 RUN_DIR = os.path.join("runs/runs_2v2", RUN_NAME)
 
 EVAL_DIR = os.path.join(RUN_DIR, "eval")
 REPLAY_DIR = os.path.join(EVAL_DIR, "replays")
 os.makedirs(REPLAY_DIR, exist_ok=True)
 
-N_EVAL_EPISODES = 50
+N_EVAL_EPISODES = 20
 SEED_START = 1000
 
 
@@ -80,6 +80,7 @@ for ep in range(N_EVAL_EPISODES):
         )
 
         obs, _, done, info = vec_env.step(action)
+
         episode_start = done
         step_count += 1
 
@@ -96,6 +97,7 @@ for ep in range(N_EVAL_EPISODES):
     }
 
     all_logs.append(log)
+
     print("EVAL:", log)
 
 

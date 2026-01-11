@@ -32,9 +32,8 @@ class HeuristicBot3DOF:
 
         fire = 0.0
         if (
-            R < self.fire_range
-            and abs(brg) < self.fire_brg
-            and abs(aoff) < self.fire_aoff
+                R < self.fire_range
+                and abs(brg) < self.fire_brg * 1.2
         ):
             fire = 1.0
 

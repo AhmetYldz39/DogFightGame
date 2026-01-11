@@ -12,18 +12,18 @@ from scenarios.scenario_2v2.dogfight_wrappers_2v2_3dof import Dogfight2v2SB3Wrap
 # ======================================================
 # CONFIG
 # ======================================================
-RUN_NAME = "rppo_2v2_final_reward_v3"
+RUN_NAME = "rppo_2v2_final_reward_v6"
 RUN_DIR = os.path.join("runs/runs_2v2", RUN_NAME)
 os.makedirs(RUN_DIR, exist_ok=True)
 
 SEED = 42
 N_ENVS = 8
-TOTAL_STEPS = 200_000  # -> for each phase
-ENT_COEF = 0.015
+TOTAL_STEPS = 1_000_000
+ENT_COEF = 0.005
 
 # Fine-tune opsiyonu
 FINE_TUNE = False
-BASE_RUN = "rppo_2v2_prev_run"  # FINE_TUNE=True ise kullanılır
+BASE_RUN = "rppo_2v2_final_reward_v5"  # FINE_TUNE=True ise kullanılır
 
 
 # ======================================================
@@ -46,7 +46,7 @@ vec_env = DummyVecEnv([make_env(i) for i in range(N_ENVS)])
 # ------------------------------------------------------
 if FINE_TUNE:
     vec_env = VecNormalize.load(
-        os.path.join("runs", BASE_RUN, "vecnormalize.pkl"),
+        os.path.join("runs/runs_2v2", BASE_RUN, "vecnormalize.pkl"),
         vec_env
     )
 else:
@@ -63,7 +63,7 @@ else:
 # ======================================================
 if FINE_TUNE:
     model = RecurrentPPO.load(
-        os.path.join("runs", BASE_RUN, "final_model.zip"),
+        os.path.join("runs/runs_2v2", BASE_RUN, "final_model.zip"),
         env=vec_env
     )
 else:
