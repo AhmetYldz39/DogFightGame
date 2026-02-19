@@ -2,7 +2,8 @@
 
 A decentralized continuous-control MARL framework demonstrating emergent coordination under partial observability.
 
-Presentation Link: https://drive.google.com/file/d/1mTbr0ZEtKVAXL0z10BAcMQfeop_xcTRP/view?usp=sharing
+Presentation link: https://drive.google.com/file/d/1mTbr0ZEtKVAXL0z10BAcMQfeop_xcTRP/view?usp=sharing
+
 ---
 
 ## Overview
